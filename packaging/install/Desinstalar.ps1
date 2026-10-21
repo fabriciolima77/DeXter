@@ -16,7 +16,7 @@ if ($pkg) {
 if ($RemoverCertificado) {
     $cer = Join-Path $PSScriptRoot 'DeXter.cer'
     $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($cer)
-    $cmd = "Get-ChildItem Cert:\LocalMachine\TrustedPeople | Where-Object Thumbprint -eq '$($cert.Thumbprint)' | Remove-Item"
+    $cmd = "Get-ChildItem Cert:\LocalMachine\TrustedPeople, Cert:\LocalMachine\Root | Where-Object Thumbprint -eq '$($cert.Thumbprint)' | Remove-Item"
     Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd
     Write-Host "Certificado removido."
 }

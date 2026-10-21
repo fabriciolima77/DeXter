@@ -93,6 +93,7 @@ Menu → **Abrir configuração** (`dexter.json`): nome da tela (`NomeTela`; vaz
 | "Receptor Miracast não iniciou" / AccessDenied | Feche o app Conectar e qualquer outro receptor Miracast; desative "Projetar neste PC" nas Configurações. O log lista os processos suspeitos. |
 | "DeXter - (nome do PC)" não aparece no celular | Confira se o Wi-Fi do PC está ligado e se o ícone está azul. Use "Reiniciar receptor". |
 | "Celular não encontrado pelo adb" | Cabo conectado com Depuração USB ligada, ou Wi-Fi preparado. Na primeira vez, aceite a autorização na tela do celular. |
+| Erro 0x800B010A ao instalar | O certificado do projeto não está confiável. Instale pelo **Instalar.cmd** (não abra o `.msix` direto); ele coloca o `DeXter.cer` em "Pessoas Confiáveis" e em "Autoridades de Certificação Raiz Confiáveis". |
 | Vídeo travando por Wi-Fi | Diminua `ScrcpyArgsWifi` no `dexter.json` (ex.: `--video-bit-rate=4M --max-size=1600`). |
 
 O log fica em Menu → **Abrir log**.

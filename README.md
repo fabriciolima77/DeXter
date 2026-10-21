@@ -37,7 +37,7 @@ It all runs from the system tray. It opens DeX automatically, reconnects when so
 1. Download **DeXter-x.y.z-x64.zip** from [Releases](https://github.com/fabriciolima77/DeXter/releases/latest) and extract it.
 2. Double-click **Instalar.cmd**.
 
-The package is signed with the project's own self-signed certificate. On first install, Windows asks for administrator permission to trust it. `DeXter.cer` and `SHA256SUMS.txt` are attached to every release.
+The package is signed with the project's own self-signed certificate. On first install, Windows asks for administrator permission to trust it (the installer adds `DeXter.cer` to *Trusted People* and *Trusted Root*). Don't open the `.msix` directly, or Windows rejects it with error 0x800B010A. `DeXter.cer` and `SHA256SUMS.txt` are attached to every release.
 
 ## Use
 

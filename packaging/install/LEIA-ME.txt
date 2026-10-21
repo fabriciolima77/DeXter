@@ -6,6 +6,8 @@ INSTALAR
   2. Clique duas vezes em Instalar.cmd.
      Na primeira vez o Windows pede permissao de administrador para confiar
      no certificado do projeto (o pacote e autoassinado).
+     Nao abra o .msix direto: sem o Instalar.cmd o Windows recusa o pacote
+     (erro 0x800B010A).
 
 USAR
   1. Feche o app "Conectar" do Windows, se estiver aberto.
