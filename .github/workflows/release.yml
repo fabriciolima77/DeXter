@@ -1,0 +1,72 @@
+# Gera e publica um release quando uma tag vX.Y.Z e enviada:
+#   git tag v0.3.0 && git push origin v0.3.0
+# Precisa dos secrets SIGNING_PFX_BASE64 e SIGNING_PFX_PASSWORD (scripts/New-Certificado.ps1).
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      versao:
+        description: 'Versao (x.y.z) para um build de teste, sem publicar release'
+        required: true
+        default: '0.0.1'
+
+permissions:
+  contents: write
+
+jobs:
+  pacote:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Versao
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') { $v = '${{ github.event.inputs.versao }}' }
+          else { $v = '${{ github.ref_name }}'.TrimStart('v') }
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "Versao invalida: $v" }
+          "VERSAO=$v" >> $env:GITHUB_ENV
+
+      - name: Cache do scrcpy
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: scrcpy-${{ hashFiles('src/DeXter/DeXter.csproj') }}
+
+      - name: Gerar MSIX assinado
+        shell: pwsh
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
+          SIGNING_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
+        run: ./scripts/pack.ps1 -Versao $env:VERSAO
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DeXter-${{ env.VERSAO }}
+          path: dist/*
+
+      - name: Publicar release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: DeXter ${{ env.VERSAO }}
+          generate_release_notes: true
+          files: |
+            dist/DeXter-${{ env.VERSAO }}-x64.zip
+            dist/DeXter-${{ env.VERSAO }}-x64.msix
+            dist/DeXter.cer
+            dist/SHA256SUMS.txt
+          body: |
+            ## Como instalar
+            1. Baixe **DeXter-${{ env.VERSAO }}-x64.zip** e extraia.
+            2. Clique duas vezes em **Instalar.cmd** (na primeira vez o Windows pede permissão de administrador para confiar no certificado do projeto).
+            3. Abra o DeXter pelo menu Iniciar; no celular: DeX → conectar a TV/monitor → **DeXter - (nome do seu PC)**.
+
+            Requisitos: Windows 10 2004+ ou Windows 11 com Wi-Fi compatível com Miracast; celular Samsung com DeX sem fio e Depuração USB ativa.

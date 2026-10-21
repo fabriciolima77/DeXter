@@ -1,0 +1,21 @@
+# Compila a cada push/PR para conferir que nada quebrou (sem empacotar nem assinar).
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/cache@v4
+        with:
+          path: vendor
+          key: scrcpy-${{ hashFiles('src/DeXter/DeXter.csproj') }}
+      - run: dotnet build src/DeXter/DeXter.csproj -c Release

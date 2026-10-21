@@ -1,0 +1,17 @@
+# build
+bin/
+obj/
+obj-pack/
+dist/
+vendor/
+*.user
+.vs/
+.vscode/
+
+# chave privada de assinatura: NUNCA commitar
+cert/
+*.pfx
+
+# dados locais
+*.log
+*.log.old

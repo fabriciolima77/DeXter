@@ -1,0 +1,25 @@
+DeXter - use o Samsung DeX numa janela do Windows
+https://github.com/fabriciolima77/DeXter
+
+INSTALAR
+  1. Extraia este zip inteiro numa pasta.
+  2. Clique duas vezes em Instalar.cmd.
+     Na primeira vez o Windows pede permissao de administrador para confiar
+     no certificado do projeto (o pacote e autoassinado).
+
+USAR
+  1. Feche o app "Conectar" do Windows, se estiver aberto.
+  2. Abra o DeXter (menu Iniciar ou comando "dexter"). Um icone aparece na bandeja.
+  3. No celular, ligue a Depuracao USB (Opcoes do desenvolvedor) e conecte o cabo
+     - ou use o menu do icone > Conexao com o celular para usar por Wi-Fi.
+  4. No celular: DeX > conectar a TV/monitor > "DeXter - (nome do seu PC)".
+     A janela do DeX abre sozinha.
+
+ATUALIZAR
+  Baixe o zip novo e rode o Instalar.cmd de novo.
+
+DESINSTALAR
+  Configuracoes > Aplicativos > DeXter > Desinstalar, ou rode Desinstalar.ps1.
+
+DeXter e software livre (GPL-3.0) e nao tem afiliacao com a Samsung.
+Inclui o scrcpy e o adb (veja THIRD_PARTY_NOTICES.md).
