@@ -1,0 +1,27 @@
+DeXter - use o Samsung DeX numa janela do Windows
+https://github.com/fabriciolima77/DeXter
+
+USAR (nao precisa instalar)
+  1. Extraia o zip numa pasta (ex.: C:\DeXter) e abra o DeXter.exe.
+     Na primeira vez o Windows pode mostrar "O Windows protegeu o computador":
+     clique em "Mais informacoes" > "Executar assim mesmo" (o app nao e assinado).
+  2. No celular, ligue a Depuracao USB (Opcoes do desenvolvedor) e conecte o cabo.
+     Na primeira vez, aceite a autorizacao de depuracao na tela do celular.
+  3. O DeX abre sozinho numa janela. Um icone fica na bandeja, perto do relogio.
+
+SEM CABO
+  Menu do icone > Conexao com o celular > Parear sem cabo (uma vez) ou
+  Preparar Wi-Fi pelo cabo. Celular e PC na mesma rede.
+
+TELA DO CELULAR
+  Menu do icone > Abrir a tela do celular (sem DeX). Para voltar: Voltar para o DeX.
+
+ATUALIZAR
+  Feche o DeXter (menu > Sair) e substitua a pasta pela da versao nova.
+  Suas configuracoes ficam em %LOCALAPPDATA%\DeXter.
+
+QUEM USAVA A VERSAO 0.3.x (instalada)
+  Desinstale antes: Configuracoes > Aplicativos > DeXter > Desinstalar.
+
+DeXter e software livre (GPL-3.0) e nao tem afiliacao com a Samsung.
+Inclui o scrcpy e o adb, e um servidor baseado no ScrcpyDeX (veja THIRD_PARTY_NOTICES.md).

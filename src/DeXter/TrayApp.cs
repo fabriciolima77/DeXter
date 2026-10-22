@@ -1,21 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 using Microsoft.Win32;
-using Windows.Media.Miracast;
 
 namespace DeXter;
 
 internal enum Estado
 {
     Iniciando,   // cinza
-    Aguardando,  // azul: receptor escutando, sem celular
-    Conectando,  // amarelo: celular conectado, procurando display / abrindo scrcpy
-    Ativo,       // verde: DeX na janela do scrcpy
-    Pausado,     // verde-claro: DeX conectado, janela fechada pelo usuario
+    Aguardando,  // azul: esperando o celular aparecer no adb (cabo ou Wi-Fi)
+    Conectando,  // amarelo: abrindo o DeX / a tela do celular
+    Ativo,       // verde: DeX (ou tela do celular) na janela do scrcpy
+    Pausado,     // verde-claro: janela fechada ou DeX encerrado pelo usuario
     Erro,        // vermelho
 }
 
 /// <summary>
-/// App de bandeja: orquestra receptor Miracast + scrcpy.
+/// App de bandeja: abre o Samsung DeX numa janela do scrcpy.
+/// DeX nativo (padrao): o celular conecta o DeX sem fio nele mesmo (servidor em server\dexter-server.jar).
+/// Compatibilidade: display simulado das Opcoes do desenvolvedor (mostra uma janelinha no celular).
+/// Tela do celular: espelha a tela normal do celular, sem o DeX.
 /// Toda mudanca de estado acontece na thread da UI (eventos de fundo passam por NaUi).
 /// </summary>
 internal sealed class TrayApp : ApplicationContext
@@ -24,32 +26,48 @@ internal sealed class TrayApp : ApplicationContext
     private readonly NotifyIcon _icone;
     private readonly ToolStripMenuItem _itemStatus;
     private readonly ToolStripMenuItem _itemAbrir;
-    private readonly ToolStripMenuItem _itemReiniciar;
-    private readonly Control _ui;
-    private readonly System.Windows.Forms.Timer _watchdog;
-    private readonly MiracastHost _miracast;
-    private readonly Scrcpy? _scrcpy;
-    private readonly Adb? _adb;
+    private readonly ToolStripMenuItem _itemCelular;
+    private readonly ToolStripMenuItem _itemEncerrarDex;
     private readonly ToolStripMenuItem _itemTela;
     private readonly ToolStripMenuItem _itemIniciarComWindows;
     private readonly ToolStripMenuItem _menuResolucao = new("Resolucao do DeX");
     private readonly ToolStripMenuItem _menuEscala = new("Tamanho dos itens do DeX");
+    private readonly ToolStripMenuItem _menuQualidade = new("Qualidade do video");
+    private readonly ToolStripMenuItem _menuSom = new("Som");
+    private readonly ToolStripMenuItem _menuModoDex = new("Modo do DeX");
     private readonly ToolStripMenuItem _itemTelaCheia;
-    private bool _resolucaoAplicada; // ha override de tamanho/densidade no display do DeX
     private readonly ToolStripMenuItem _itemModoAuto;
     private readonly ToolStripMenuItem _itemModoUsb;
     private readonly ToolStripMenuItem _itemModoWifi;
+    private readonly Control _ui;
+    private readonly System.Windows.Forms.Timer _watchdog;
+    private readonly Scrcpy? _scrcpy;
+    private readonly Adb? _adb;
+    private readonly DexNativo? _nativo;
     private readonly Dictionary<Estado, Icon> _icones = new();
 
     private Estado _estado = Estado.Iniciando;
+    private Action? _aoClicarAviso;    // acao do ultimo aviso (balao) clicavel
+    private bool _resolucaoAplicada;   // ha override de tamanho/densidade no display do DeX (modo nativo)
     private CancellationTokenSource? _ctsDescoberta;
-    private Task<HashSet<int>>? _linhaDeBase;
     private int _falhasScrcpy;
-    private int _falhasReceptor;
-    private int _avisosNaoEscutando;
-    private bool _reiniciando;
     private bool _saindo;
-    private bool _semOpcoesTela; // o scrcpy recusou --turn-screen-off/--screen-off-timeout nesta sessao
+    private bool _semOpcoesTela;       // o scrcpy recusou --turn-screen-off/--screen-off-timeout nesta sessao
+    private bool _abrindo;             // AbrirDexAsync em andamento
+    private bool _sessaoEncerrada;     // usuario encerrou (nao reabrir sozinho)
+    private bool _modoCelular;         // espelhando a tela normal do celular (sem DeX)
+    private bool _nativoIndisponivel;  // modo auto: o celular nao aceitou o DeX nativo nesta execucao
+    private bool _usandoSimulado;      // a sessao atual do DeX esta no display simulado
+    private string? _serialSimulado;   // celular onde criamos o display simulado (para remover ao sair)
+    private string? _serialNativo;     // celular onde o DeX nativo esta ativo (para encerrar ao sair)
+    private int _ticks;
+
+    /// <summary>Ha algo para manter aberto (DeX ou tela do celular).</summary>
+    private bool SessaoAtiva => !_sessaoEncerrada;
+
+    private string ModoDex => _cfg.ModoDex is "nativo" or "compatibilidade" ? _cfg.ModoDex : "auto";
+
+    private const string TextoAguardando = "Conecte o celular (cabo ou Wi-Fi do adb)";
 
     public TrayApp()
     {
@@ -65,9 +83,10 @@ internal sealed class TrayApp : ApplicationContext
         }
 
         _itemStatus = new ToolStripMenuItem("Iniciando...") { Enabled = false };
-        _itemAbrir = new ToolStripMenuItem("Abrir janela do DeX", null, (_, _) => _ = AbrirDexAsync(manual: true));
-        _itemReiniciar = new ToolStripMenuItem("Reiniciar receptor", null, (_, _) => _ = ReiniciarReceptorAsync("pedido do usuario"));
-        _itemTela = new ToolStripMenuItem("Apagar a tela do celular durante o DeX", null, (_, _) => AlternarTela())
+        _itemAbrir = new ToolStripMenuItem("Abrir o DeX", null, (_, _) => _ = VoltarParaDexAsync());
+        _itemCelular = new ToolStripMenuItem("Abrir a tela do celular (sem DeX)", null, (_, _) => _ = AbrirCelularAsync());
+        _itemEncerrarDex = new ToolStripMenuItem("Encerrar o DeX no celular", null, (_, _) => _ = EncerrarDexAsync());
+        _itemTela = new ToolStripMenuItem("Apagar a tela do celular durante o uso", null, (_, _) => AlternarTela())
         {
             Checked = _cfg.DesligarTelaCelular,
         };
@@ -83,19 +102,26 @@ internal sealed class TrayApp : ApplicationContext
         menuConexao.DropDownItems.Add(new ToolStripMenuItem("Parear sem cabo (Depuracao sem fio)...", null, (_, _) => _ = ParearSemCaboAsync()));
         menuConexao.DropDownItems.Add(new ToolStripMenuItem("Conectar por Wi-Fi agora", null, (_, _) => _ = ConectarWifiAgoraAsync()));
 
+        _itemTelaCheia = new ToolStripMenuItem("Abrir em tela cheia", null, (_, _) => AlternarTelaCheia());
+        MontarMenusResolucao();
+        MontarMenusSomEModo();
+        _itemIniciarComWindows = new ToolStripMenuItem("Iniciar com o Windows", null, (_, _) => AlternarInicio());
+
         var menu = new ContextMenuStrip();
         menu.Items.Add(_itemStatus);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_itemAbrir);
-        menu.Items.Add(_itemReiniciar);
-        _itemTelaCheia = new ToolStripMenuItem("Abrir em tela cheia", null, (_, _) => AlternarTelaCheia());
-        MontarMenusResolucao();
+        menu.Items.Add(_itemCelular);
+        menu.Items.Add(_itemEncerrarDex);
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_itemTela);
         menu.Items.Add(_menuResolucao);
         menu.Items.Add(_menuEscala);
+        menu.Items.Add(_menuQualidade);
+        menu.Items.Add(_menuSom);
         menu.Items.Add(_itemTelaCheia);
         menu.Items.Add(menuConexao);
-        _itemIniciarComWindows = new ToolStripMenuItem("Iniciar com o Windows", null, (_, _) => _ = AlternarInicioAsync());
+        menu.Items.Add(_menuModoDex);
         menu.Items.Add(_itemIniciarComWindows);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Abrir log", null, (_, _) => AbrirArquivo(Log.Arquivo)));
@@ -104,7 +130,6 @@ internal sealed class TrayApp : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Sair", null, (_, _) => _ = SairAsync()));
         menu.Opening += (_, _) => AtualizarMenu();
-        _ = AtualizarInicioAsync();
 
         _icone = new NotifyIcon
         {
@@ -114,11 +139,12 @@ internal sealed class TrayApp : ApplicationContext
             Visible = true,
         };
         _icone.DoubleClick += (_, _) => AoClicarDuasVezes();
-
-        _miracast = new MiracastHost(_cfg.NomeTelaEfetivo);
-        _miracast.Conectado += nome => NaUi(() => AoConectar(nome));
-        _miracast.StreamIniciado += () => NaUi(() => _ = AbrirDexAsync(manual: false));
-        _miracast.Desconectado += nome => NaUi(() => AoDesconectar(nome));
+        _icone.BalloonTipClicked += (_, _) =>
+        {
+            var acao = _aoClicarAviso;
+            _aoClicarAviso = null;
+            acao?.Invoke();
+        };
 
         var exe = _cfg.AcharScrcpy();
         if (exe != null)
@@ -126,6 +152,10 @@ internal sealed class TrayApp : ApplicationContext
             Log.Info($"[app] scrcpy: {exe}{(string.Equals(exe, Config.CaminhoEmbutido, StringComparison.OrdinalIgnoreCase) ? " (embutido)" : "")}");
             _scrcpy = new Scrcpy(exe);
             _adb = Adb.Criar(exe);
+            if (_adb != null)
+            {
+                _nativo = new DexNativo(_adb);
+            }
             Log.Info(_adb != null
                 ? $"[app] conexao com o celular: {_cfg.Conexao}"
                 : "[app] adb.exe nao encontrado ao lado do scrcpy: sem escolha USB/Wi-Fi.");
@@ -136,10 +166,9 @@ internal sealed class TrayApp : ApplicationContext
             Log.Info("[app] scrcpy.exe nao encontrado (nem o embutido). Reinstale o DeXter ou ajuste ScrcpyPath no dexter.json.");
         }
 
-        _watchdog = new System.Windows.Forms.Timer { Interval = 10_000 };
+        _watchdog = new System.Windows.Forms.Timer { Interval = 5_000 };
         _watchdog.Tick += async (_, _) => await VigiarAsync();
 
-        SystemEvents.PowerModeChanged += AoMudarEnergia;
         SystemEvents.SessionEnding += AoEncerrarSessaoWindows;
 
         // So comeca depois que o loop de mensagens estiver rodando
@@ -151,119 +180,119 @@ internal sealed class TrayApp : ApplicationContext
     private async Task IniciarAsync()
     {
         Log.Info($"=== DeXter {Projeto.Versao} ===");
-
-        if (!TemIdentidadeDePacote())
-        {
-            DefinirEstado(Estado.Erro, "Sem identidade de pacote");
-            Log.Info("[app] sem identidade de pacote: a API Miracast vai negar acesso.");
-            MessageBox.Show(
-                "O DeXter precisa ser iniciado como pacote:\n\n" +
-                "  • pelo menu Iniciar (\"DeXter\"), ou\n" +
-                "  • pelo comando  dexter  no terminal.\n\n" +
-                "Executar o DeXter.exe direto da pasta bin nao funciona.",
-                "DeXter", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            await SairAsync();
-            return;
-        }
+        Log.Info($"[app] modo do DeX: {ModoDex}; servidor nativo: {(DexNativo.JarLocal != null ? "presente" : "ausente")}");
 
         if (_scrcpy == null)
         {
             Avisar("scrcpy nao encontrado",
-                $"O receptor vai funcionar, mas sem a janela do DeX. Ajuste \"ScrcpyPath\" em {Config.Arquivo}.",
+                $"Ajuste \"ScrcpyPath\" em {Config.Arquivo} ou reinstale o DeXter.",
                 ToolTipIcon.Warning);
         }
 
-        await ReiniciarReceptorAsync("inicio");
+        DefinirEstado(Estado.Aguardando, TextoAguardando);
         _watchdog.Start();
+        await AbrirDexAsync(manual: false);
     }
 
-    private async Task ReiniciarReceptorAsync(string motivo)
+    /// <summary>Fecha a janela e encerra o DeX (ou a tela do celular); so volta com clique.</summary>
+    private async Task EncerrarDexAsync()
     {
-        if (_reiniciando || _saindo)
+        _sessaoEncerrada = true;
+        CancelarDescoberta();
+        await Task.Run(() => _scrcpy?.Fechar());
+        await PararDexNoCelularAsync();
+        _modoCelular = false;
+        DefinirEstado(Estado.Pausado, "Encerrado - clique duas vezes no icone para abrir o DeX");
+    }
+
+    /// <summary>Encerra o DeX no celular, seja nativo ou display simulado.</summary>
+    private async Task PararDexNoCelularAsync()
+    {
+        var serial = _serialNativo;
+        _serialNativo = null;
+        if (serial != null && _nativo != null)
+        {
+            await Task.WhenAny(_nativo.PararAsync(serial, CancellationToken.None), Task.Delay(10_000));
+        }
+        await RemoverDisplaySimuladoAsync();
+        _resolucaoAplicada = false;
+    }
+
+    /// <summary>Menu "Abrir a tela do celular": encerra o DeX e espelha a tela normal.</summary>
+    private async Task AbrirCelularAsync()
+    {
+        _modoCelular = true;
+        _sessaoEncerrada = false;
+        _falhasScrcpy = 0;
+        CancelarDescoberta();
+        await Task.Run(() => _scrcpy?.Fechar());
+        await PararDexNoCelularAsync();
+        await AbrirDexAsync(manual: true);
+    }
+
+    /// <summary>Menu "Abrir o DeX" / "Voltar para o DeX".</summary>
+    private async Task VoltarParaDexAsync()
+    {
+        var estavaNoCelular = _modoCelular;
+        _modoCelular = false;
+        _sessaoEncerrada = false;
+        _falhasScrcpy = 0;
+        if (estavaNoCelular)
+        {
+            CancelarDescoberta();
+            await Task.Run(() => _scrcpy?.Fechar());
+        }
+        await AbrirDexAsync(manual: true);
+    }
+
+    /// <summary>Remove um display simulado que tenha ficado de outra sessao (antes de abrir o DeX nativo).</summary>
+    private async Task LimparDisplaySimuladoAsync(string serial, CancellationToken ct)
+    {
+        if (_adb == null)
         {
             return;
         }
-        _reiniciando = true;
-        try
+        if (await _adb.LerDisplaySimuladoAsync(serial, ct) != null)
         {
-            Log.Info($"[app] (re)iniciando receptor: {motivo}");
-            CancelarDescoberta();
-            _scrcpy?.Fechar();
-            DefinirEstado(Estado.Iniciando, "Iniciando receptor...");
-
-            var ok = await _miracast.IniciarAsync();
-            if (!ok && _miracast.UltimoFoiAcessoNegado && !_saindo &&
-                motivo is "inicio" or "pedido do usuario") // nao abre janela nas tentativas automaticas
-            {
-                // Hipotese: a API so libera o receptor para um app com janela em primeiro plano
-                // (na Fase 1 a janela do console cumpria esse papel).
-                ok = await TentarComJanelaAsync();
-            }
-            if (_saindo)
-            {
-                return;
-            }
-
-            if (ok)
-            {
-                _falhasReceptor = 0;
-                _avisosNaoEscutando = 0;
-                DefinirEstado(Estado.Aguardando, $"Aguardando o celular (\"{_cfg.NomeTelaEfetivo}\")");
-            }
-            else
-            {
-                _falhasReceptor++;
-                DefinirEstado(Estado.Erro, "Receptor Miracast nao iniciou");
-                if (_falhasReceptor == 1)
-                {
-                    Avisar("Receptor nao iniciou",
-                        _miracast.UltimoFoiAcessoNegado
-                            ? "Acesso negado pelo Windows. Feche o app \"Conectar\" e desative \"Projetar neste PC\" nas Configuracoes. Vou tentar de novo sozinho."
-                            : "Feche o app \"Conectar\" (so um receptor Miracast roda por vez) e confira o Wi-Fi. Vou tentar de novo sozinho.",
-                        ToolTipIcon.Error);
-                }
-            }
+            await _adb.DefinirDisplaySimuladoAsync(serial, null, ct);
         }
-        finally
-        {
-            _reiniciando = false;
-        }
+        _serialSimulado = null;
     }
 
-    /// <summary>Repete a inicializacao com uma janelinha visivel e ativa.</summary>
-    private async Task<bool> TentarComJanelaAsync()
+    /// <summary>Cria (ou ajusta) o display simulado no celular. Retorna o tamanho usado.</summary>
+    private async Task<Size> GarantirDisplaySimuladoAsync(string serial, CancellationToken ct)
     {
-        using var janela = new Form
+        var tamanho = ResolucaoDesejada();
+        if (tamanho.IsEmpty)
         {
-            Text = "DeXter",
-            FormBorderStyle = FormBorderStyle.FixedToolWindow,
-            StartPosition = FormStartPosition.CenterScreen,
-            ClientSize = new Size(340, 70),
-            TopMost = true,
-            ShowInTaskbar = true,
-            MinimizeBox = false,
-            MaximizeBox = false,
-        };
-        janela.Controls.Add(new Label
+            tamanho = new Size(1920, 1080);
+        }
+        if (_adb == null)
         {
-            Text = "Ativando o receptor Miracast...",
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleCenter,
-        });
-        janela.Show();
-        janela.Activate();
-        await Task.Delay(500);
-
-        var emPrimeiroPlano = GetForegroundWindow() == janela.Handle;
-        Log.Info($"[app] tentando de novo com janela visivel (primeiro plano: {(emPrimeiroPlano ? "sim" : "nao")})...");
-        var ok = await _miracast.IniciarAsync();
-        Log.Info($"[app] resultado com janela visivel: {(ok ? "OK - receptor ativo" : "falhou")}");
-        janela.Close();
-        return ok;
+            return tamanho;
+        }
+        var dpi = (int)Math.Round(Math.Clamp(_cfg.DensidadeSimulado, 80, 640) * Math.Clamp(_cfg.EscalaDex, 50, 200) / 100.0);
+        var valor = $"{tamanho.Width}x{tamanho.Height}/{dpi}";
+        var atual = await _adb.LerDisplaySimuladoAsync(serial, ct);
+        if (atual != valor)
+        {
+            await _adb.DefinirDisplaySimuladoAsync(serial, valor, ct);
+            await Task.Delay(1500, ct); // o Android cria o display e o DeX sobe nele
+        }
+        _serialSimulado = serial;
+        return tamanho;
     }
 
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
+    private async Task RemoverDisplaySimuladoAsync()
+    {
+        var serial = _serialSimulado;
+        if (_adb == null || serial == null)
+        {
+            return;
+        }
+        _serialSimulado = null;
+        await Task.WhenAny(_adb.DefinirDisplaySimuladoAsync(serial, null, CancellationToken.None), Task.Delay(8000));
+    }
 
     private async Task SairAsync()
     {
@@ -274,7 +303,6 @@ internal sealed class TrayApp : ApplicationContext
         _saindo = true;
         Log.Info("[app] encerrando...");
         _watchdog.Stop();
-        SystemEvents.PowerModeChanged -= AoMudarEnergia;
         SystemEvents.SessionEnding -= AoEncerrarSessaoWindows;
         CancelarDescoberta();
 
@@ -282,18 +310,17 @@ internal sealed class TrayApp : ApplicationContext
         var serialDex = _scrcpy?.SerialAtual;
         var displayDex = _scrcpy?.DisplayAtual;
         await Task.Run(() => _scrcpy?.Fechar());
-        if (_resolucaoAplicada && _adb != null && displayDex != null && _miracast.TemConexao)
+        if (_resolucaoAplicada && _adb != null && displayDex != null && !_modoCelular)
         {
-            // devolve o DeX ao tamanho original no celular
             await Task.WhenAny(_adb.AplicarDisplayAsync(serialDex ?? "", displayDex.Value, 0, 0, 0, CancellationToken.None), Task.Delay(5000));
         }
+        await PararDexNoCelularAsync(); // devolve o celular ao normal
         if (_adb is { Embutido: true })
         {
             // o servidor do adb embutido ficaria rodando de dentro da pasta do app
             Log.Info("[app] encerrando o servidor do adb embutido...");
             await Task.WhenAny(_adb.PararServidorAsync(), Task.Delay(5000));
         }
-        await Task.WhenAny(_miracast.PararAsync(), Task.Delay(5000));
 
         _icone.Visible = false;
         _icone.Dispose();
@@ -307,47 +334,9 @@ internal sealed class TrayApp : ApplicationContext
 
     // ---------------------------------------------------------------- eventos
 
-    private void AoConectar(string nome)
-    {
-        _falhasScrcpy = 0;
-        DefinirEstado(Estado.Conectando, $"{nome} conectado, aguardando o DeX...");
-
-        // Displays que ja existiam antes do DeX criar o dele (ajuda a escolher o certo)
-        if (_scrcpy != null)
-        {
-            var scrcpy = _scrcpy;
-            _linhaDeBase = Task.Run(async () =>
-            {
-                var disp = await EscolherDispositivoAsync(CancellationToken.None);
-                if (disp == null)
-                {
-                    return new HashSet<int>();
-                }
-                var (ids, _) = await scrcpy.ListarDisplaysAsync(disp.Serial, CancellationToken.None);
-                return ids.ToHashSet();
-            });
-        }
-    }
-
-    private void AoDesconectar(string nome)
-    {
-        if (_saindo)
-        {
-            return;
-        }
-        CancelarDescoberta();
-        _linhaDeBase = null;
-        _resolucaoAplicada = false; // o display do DeX deixou de existir
-        _ = Task.Run(() => _scrcpy?.Fechar());
-        DefinirEstado(Estado.Aguardando, $"Aguardando o celular (\"{_cfg.NomeTelaEfetivo}\")");
-        Avisar("DeX desconectado",
-            $"{nome} saiu da tela \"{_cfg.NomeTelaEfetivo}\". Para voltar: no celular, DeX → conectar a TV/monitor.",
-            ToolTipIcon.Info);
-    }
-
     private void AoFecharScrcpy(int codigo, TimeSpan duracao, string ultimaLinha)
     {
-        if (_saindo || !_miracast.TemConexao)
+        if (_saindo || !SessaoAtiva)
         {
             return;
         }
@@ -356,7 +345,9 @@ internal sealed class TrayApp : ApplicationContext
         {
             // Usuario fechou a janela: o DeX continua no celular, so nao reabre sozinho.
             _falhasScrcpy = 0;
-            DefinirEstado(Estado.Pausado, "DeX conectado (janela fechada) - clique duas vezes para abrir");
+            DefinirEstado(Estado.Pausado, _modoCelular
+                ? "Tela do celular fechada - clique duas vezes para abrir de novo"
+                : "Janela do DeX fechada - clique duas vezes para abrir");
             return;
         }
 
@@ -383,10 +374,20 @@ internal sealed class TrayApp : ApplicationContext
 
         if (_falhasScrcpy > _cfg.TentativasScrcpy)
         {
+            if (codigo == 2)
+            {
+                // celular saiu (cabo tirado / Wi-Fi caiu): o watchdog reabre quando ele voltar
+                DefinirEstado(Estado.Aguardando, TextoAguardando);
+                return;
+            }
             DefinirEstado(Estado.Erro, "scrcpy falhou varias vezes");
+            if (_falhasScrcpy != _cfg.TentativasScrcpy + 1)
+            {
+                return; // ja avisou
+            }
             Avisar("Nao consegui abrir o DeX",
                 string.IsNullOrEmpty(ultimaLinha)
-                    ? "O scrcpy fechou com erro. Confira o cabo USB ou a conexao Wi-Fi do adb; depois use \"Abrir janela do DeX\"."
+                    ? "O scrcpy fechou com erro. Confira o cabo USB ou a conexao Wi-Fi do adb; depois use \"Abrir o DeX\"."
                     : $"scrcpy: {ultimaLinha}",
                 ToolTipIcon.Error);
             return;
@@ -401,7 +402,7 @@ internal sealed class TrayApp : ApplicationContext
     private async Task ReabrirDepoisAsync(TimeSpan espera)
     {
         await Task.Delay(espera);
-        if (!_saindo && _miracast.TemConexao)
+        if (!_saindo && SessaoAtiva)
         {
             await AbrirDexAsync(manual: false);
         }
@@ -409,33 +410,13 @@ internal sealed class TrayApp : ApplicationContext
 
     private void AoClicarDuasVezes()
     {
-        if (_miracast.TemConexao)
+        if (_scrcpy is { Aberto: true })
         {
-            _ = AbrirDexAsync(manual: true);
+            return;
         }
-        else
-        {
-            Avisar("DeXter", $"No celular: DeX → conectar a TV/monitor → \"{_cfg.NomeTelaEfetivo}\".", ToolTipIcon.Info);
-        }
-    }
-
-    private void AoMudarEnergia(object? sender, PowerModeChangedEventArgs e)
-    {
-        if (e.Mode == PowerModes.Resume)
-        {
-            // Depois de suspender, a sessao Miracast costuma morrer: recria o receptor
-            NaUi(() => _ = ReabrirAposSuspensaoAsync());
-        }
-    }
-
-    private async Task ReabrirAposSuspensaoAsync()
-    {
-        Log.Info("[app] voltou da suspensao.");
-        await Task.Delay(5000); // da tempo do Wi-Fi voltar
-        if (!_miracast.TemConexao)
-        {
-            await ReiniciarReceptorAsync("retorno da suspensao");
-        }
+        _sessaoEncerrada = false;
+        _falhasScrcpy = 0;
+        _ = AbrirDexAsync(manual: true);
     }
 
     private void AoEncerrarSessaoWindows(object? sender, SessionEndingEventArgs e)
@@ -444,7 +425,7 @@ internal sealed class TrayApp : ApplicationContext
         // Limpeza sincrona: nao da para esperar tarefas aqui
         _saindo = true;
         _scrcpy?.Fechar();
-        _miracast.Dispose();
+        try { Task.Run(PararDexNoCelularAsync).Wait(TimeSpan.FromSeconds(5)); } catch { /* sem tempo */ }
         _icone.Visible = false;
     }
 
@@ -460,51 +441,43 @@ internal sealed class TrayApp : ApplicationContext
             }
             return;
         }
-        if (!_miracast.TemConexao)
-        {
-            if (manual)
-            {
-                AoClicarDuasVezes();
-            }
-            return;
-        }
-        if (_scrcpy.Aberto)
-        {
-            return;
-        }
         if (manual)
         {
+            _sessaoEncerrada = false;
             _falhasScrcpy = 0;
         }
+        if (!SessaoAtiva || _scrcpy.Aberto || _abrindo)
+        {
+            return;
+        }
+        _abrindo = true;
+        try
+        {
+            await AbrirInternoAsync(manual);
+        }
+        finally
+        {
+            _abrindo = false;
+        }
+    }
 
+    private int _falhasNativo;
+
+    private async Task AbrirInternoAsync(bool manual)
+    {
+        var scrcpy = _scrcpy!;
         CancelarDescoberta();
         var cts = new CancellationTokenSource();
         _ctsDescoberta = cts;
+        DefinirEstado(Estado.Conectando, "Procurando o celular...");
 
-        DefinirEstado(Estado.Conectando, "Procurando o display do DeX...");
-
-        var baseVazia = new HashSet<int>();
-        var linhaDeBase = baseVazia;
-        if (_linhaDeBase != null)
-        {
-            try
-            {
-                linhaDeBase = await _linhaDeBase.WaitAsync(TimeSpan.FromSeconds(15), cts.Token);
-            }
-            catch
-            {
-                linhaDeBase = baseVazia;
-            }
-            _linhaDeBase = null; // so vale para a primeira descoberta da conexao
-        }
-
-        // 1. qual celular/caminho (USB ou Wi-Fi), esperando ele aparecer no adb
-        var limite = DateTime.UtcNow + TimeSpan.FromSeconds(_cfg.DescobertaSegundos);
+        // 1. qual celular/caminho (USB ou Wi-Fi). Sem pedido do usuario, so uma olhada (o watchdog repete).
+        var limite = DateTime.UtcNow + (manual ? TimeSpan.FromSeconds(_cfg.DescobertaSegundos) : TimeSpan.Zero);
         Dispositivo? disp = null;
-        while (!cts.IsCancellationRequested && DateTime.UtcNow < limite)
+        while (!cts.IsCancellationRequested)
         {
             disp = await Task.Run(() => EscolherDispositivoAsync(cts.Token));
-            if (disp != null)
+            if (disp != null || DateTime.UtcNow >= limite)
             {
                 break;
             }
@@ -517,38 +490,96 @@ internal sealed class TrayApp : ApplicationContext
                 return;
             }
         }
-        if (cts.IsCancellationRequested || _saindo || !_miracast.TemConexao)
+        if (cts.IsCancellationRequested || _saindo || !SessaoAtiva)
         {
             return;
         }
         if (disp == null)
         {
-            DefinirEstado(Estado.Erro, "Celular nao encontrado pelo adb");
-            Avisar("Celular nao encontrado",
-                _cfg.Conexao == "usb"
-                    ? "Conecte o cabo USB com a depuracao USB ativa."
-                    : "Sem cabo e sem adb por Wi-Fi. Use \"Conexao com o celular\" para preparar o Wi-Fi.",
-                ToolTipIcon.Warning);
+            DefinirEstado(Estado.Aguardando, TextoAguardando);
+            if (manual)
+            {
+                Avisar("Celular nao encontrado",
+                    _cfg.Conexao == "usb"
+                        ? "Conecte o cabo USB com a Depuracao USB ativa."
+                        : "Conecte o cabo (com Depuracao USB) ou prepare o Wi-Fi em \"Conexao com o celular\".",
+                    ToolTipIcon.Warning);
+            }
             return;
         }
         var via = disp.Wifi ? "Wi-Fi" : "USB";
-        DefinirEstado(Estado.Conectando, $"Procurando o display do DeX ({via})...");
-
-        // 2. qual display e o do DeX
-        var scrcpy = _scrcpy;
         var serial = disp.Serial;
-        int? id;
+
+        // 2a. tela normal do celular (sem DeX)
+        if (_modoCelular)
+        {
+            DefinirEstado(Estado.Conectando, $"Abrindo a tela do celular ({via})...");
+            if (scrcpy.Abrir(0, serial, MontarArgs(disp.Wifi, celular: true)))
+            {
+                DefinirEstado(Estado.Ativo, $"Tela do celular ({via})");
+            }
+            else
+            {
+                DefinirEstado(Estado.Erro, "Falha ao abrir o scrcpy");
+            }
+            return;
+        }
+
+        // 2b. DeX: nativo (sem janelinha) ou compatibilidade (display simulado)
+        int? id = null;
         try
         {
-            id = await Task.Run(() => scrcpy.DescobrirDisplayAsync(
-                serial, linhaDeBase, TimeSpan.FromSeconds(_cfg.DescobertaSegundos), cts.Token), cts.Token);
+            var tentarNativo = ModoDex == "nativo" || (ModoDex == "auto" && !_nativoIndisponivel);
+            if (tentarNativo && _nativo != null)
+            {
+                DefinirEstado(Estado.Conectando, $"Abrindo o DeX ({via})...");
+                await LimparDisplaySimuladoAsync(serial, cts.Token);
+                id = await _nativo.AtivarAsync(serial,
+                    async d => (await scrcpy.ListarDisplaysAsync(serial, cts.Token)).ids.Contains(d), cts.Token);
+                if (id != null)
+                {
+                    _serialNativo = serial;
+                    _usandoSimulado = false;
+                    _falhasNativo = 0;
+                }
+                else
+                {
+                    _falhasNativo++;
+                    var desistir = ModoDex == "auto" && (_nativo.UltimoFoiIncompativel || _falhasNativo >= 2);
+                    if (desistir)
+                    {
+                        _nativoIndisponivel = true;
+                        Avisar("Usando o modo compatibilidade",
+                            $"O DeX nativo nao abriu ({_nativo.UltimoErro}). Vou usar o display simulado, que mostra uma janelinha no celular.",
+                            ToolTipIcon.Info);
+                    }
+                    else
+                    {
+                        DefinirEstado(Estado.Erro, "O DeX nativo nao abriu (tento de novo)");
+                        if (manual)
+                        {
+                            Avisar("O DeX nao abriu", $"{_nativo.UltimoErro}. Detalhes no log.", ToolTipIcon.Warning);
+                        }
+                        return;
+                    }
+                }
+            }
+
+            if (id == null)
+            {
+                DefinirEstado(Estado.Conectando, $"Abrindo o DeX no display simulado ({via})...");
+                var tamanho = await GarantirDisplaySimuladoAsync(serial, cts.Token);
+                _usandoSimulado = true;
+                id = await Task.Run(() => scrcpy.DescobrirDisplayAsync(
+                    serial, new HashSet<int>(), TimeSpan.FromSeconds(_cfg.DescobertaSegundos), cts.Token, tamanho), cts.Token);
+            }
         }
         catch (OperationCanceledException)
         {
             return;
         }
 
-        if (cts.IsCancellationRequested || _saindo || !_miracast.TemConexao)
+        if (cts.IsCancellationRequested || _saindo || !SessaoAtiva || _modoCelular)
         {
             return;
         }
@@ -561,21 +592,23 @@ internal sealed class TrayApp : ApplicationContext
         if (id == null)
         {
             DefinirEstado(Estado.Erro, "Display do DeX nao encontrado");
-            Avisar("Display do DeX nao encontrado",
-                $"O adb ve o celular ({via}), mas nao achei o display do DeX. Depois use \"Abrir janela do DeX\".",
-                ToolTipIcon.Warning);
+            if (manual)
+            {
+                Avisar("Display do DeX nao encontrado",
+                    $"O adb ve o celular ({via}), mas o DeX nao abriu. Confira se o DeX esta habilitado no celular. Detalhes no log.",
+                    ToolTipIcon.Warning);
+            }
             return;
         }
 
-        await AplicarResolucaoAsync(serial, id.Value);
-        if (cts.IsCancellationRequested || _saindo || !_miracast.TemConexao)
+        if (!_usandoSimulado)
         {
-            return;
+            await AplicarResolucaoAsync(serial, id.Value); // no simulado o tamanho vem do proprio display
         }
 
         if (scrcpy.Abrir(id.Value, serial, MontarArgs(disp.Wifi)))
         {
-            DefinirEstado(Estado.Ativo, $"DeX ativo (display {id}, {via})");
+            DefinirEstado(Estado.Ativo, $"DeX ativo ({(_usandoSimulado ? "compatibilidade" : "nativo")}, {via})");
         }
         else
         {
@@ -584,24 +617,34 @@ internal sealed class TrayApp : ApplicationContext
     }
 
     /// <summary>Escolhe o celular conforme o modo. Sem adb, deixa o scrcpy escolher (serial vazio).</summary>
-    private async Task<Dispositivo?> EscolherDispositivoAsync(CancellationToken ct)
+    private async Task<Dispositivo?> EscolherDispositivoAsync(CancellationToken ct, bool reconectarWifi = true)
     {
         if (_adb == null)
         {
             return new Dispositivo("", "device", false);
         }
-        var d = await _adb.EscolherAsync(_cfg.Conexao, _cfg.EnderecoWifi, ct);
-        if (d != null)
+        var d = await _adb.EscolherAsync(_cfg.Conexao, _cfg.EnderecoWifi, ct, reconectarWifi);
+        var serial = d?.Serial;
+        if (serial != _ultimoSerial)
         {
-            Log.Info($"[adb] usando {d}");
+            _ultimoSerial = serial;
+            Log.Info(d != null ? $"[adb] usando {d}" : "[adb] nenhum celular pronto");
         }
         return d;
     }
 
-    private string MontarArgs(bool wifi)
+    private string? _ultimoSerial;
+
+    private string MontarArgs(bool wifi, bool celular = false)
     {
         var args = _cfg.ScrcpyArgs;
-        if (_cfg.TelaCheia)
+        var qualidade = Config.Qualidades.FirstOrDefault(q => q.id == _cfg.Qualidade);
+        if (celular)
+        {
+            // tela normal do celular: teclado fisico simulado (acentos/atalhos), como no script do usuario
+            args += " --window-title=\"DeXter - Celular\" --keyboard=uhid";
+        }
+        else if (_cfg.TelaCheia)
         {
             args += " --fullscreen";
         }
@@ -609,6 +652,17 @@ internal sealed class TrayApp : ApplicationContext
         {
             args += " " + _cfg.ScrcpyArgsWifi; // depois dos padroes: os ultimos valores valem
         }
+        if (qualidade.id != null)
+        {
+            // vem por ultimo: no scrcpy o ultimo valor de uma opcao repetida e o que vale
+            args += $" --video-bit-rate={(wifi ? qualidade.wifi : qualidade.cabo)}M";
+        }
+        args += _cfg.Som switch
+        {
+            "celular" => " --no-audio",  // som fica no celular (alto-falante ou fones do celular)
+            "ambos" => " --audio-dup",   // toca no PC e no celular (Android 13+)
+            _ => "",                     // padrao do scrcpy: toca no PC
+        };
         if (!_semOpcoesTela)
         {
             if (_cfg.DesligarTelaCelular)
@@ -628,7 +682,7 @@ internal sealed class TrayApp : ApplicationContext
     {
         if (_scrcpy is not { Aberto: true })
         {
-            return;
+            return; // vale na proxima abertura
         }
         await Task.Run(() => _scrcpy.Fechar());
         await AbrirDexAsync(manual: true);
@@ -724,7 +778,7 @@ internal sealed class TrayApp : ApplicationContext
                 ? "O adb esta falando com o celular pela rede."
                 : "Prepare o Wi-Fi pelo cabo ou pareie pela Depuracao sem fio. Detalhes no log.",
             ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
-        if (ok && _miracast.TemConexao && _scrcpy is { Aberto: false })
+        if (ok && SessaoAtiva && _scrcpy is { Aberto: false })
         {
             await AbrirDexAsync(manual: true);
         }
@@ -785,52 +839,39 @@ internal sealed class TrayApp : ApplicationContext
 
     // ---------------------------------------------------------------- watchdog
 
+    /// <summary>A cada 5 s: quando o celular aparece no adb (cabo ou Wi-Fi), abre o DeX/tela do celular sozinho.</summary>
     private async Task VigiarAsync()
     {
-        if (_saindo || _reiniciando)
+        if (_saindo || _scrcpy == null || _abrindo || _scrcpy.Aberto || _sessaoEncerrada || _estado == Estado.Pausado)
         {
             return;
         }
-
-        // Receptor nao iniciou: tenta de novo (a cada 10 s nas 3 primeiras, depois a cada 60 s)
-        if (_estado == Estado.Erro && !_miracast.TemConexao && _falhasReceptor > 0)
+        if (_estado == Estado.Erro)
         {
-            _falhasReceptor++;
-            if (_falhasReceptor <= 4 || _falhasReceptor % 6 == 0)
+            // depois de erro, so tenta de novo a cada ~30 s
+            if (++_ticks % 6 != 0)
             {
-                await ReiniciarReceptorAsync("nova tentativa apos falha");
+                return;
+            }
+            _falhasScrcpy = 0;
+        }
+        else
+        {
+            _ticks++;
+        }
+
+        // reconectar o Wi-Fi do adb (connect/mDNS) e mais lento: so a cada ~30 s
+        var reconectar = _ticks % 6 == 1;
+        var disp = await Task.Run(() => EscolherDispositivoAsync(CancellationToken.None, reconectar));
+        if (disp == null)
+        {
+            if (_estado != Estado.Aguardando)
+            {
+                DefinirEstado(Estado.Aguardando, TextoAguardando);
             }
             return;
         }
-
-        if (_miracast.TemConexao)
-        {
-            _avisosNaoEscutando = 0;
-            return;
-        }
-
-        var st = await _miracast.LerStatusAsync();
-        var escutando = st is MiracastReceiverListeningStatus.Listening
-            or MiracastReceiverListeningStatus.ConnectionPending
-            or MiracastReceiverListeningStatus.Connected;
-
-        if (escutando)
-        {
-            _avisosNaoEscutando = 0;
-            return;
-        }
-
-        _avisosNaoEscutando++;
-        Log.Info($"[watchdog] receptor nao esta escutando ({st?.ToString() ?? "desconhecido"}), {_avisosNaoEscutando}x.");
-        if (st == MiracastReceiverListeningStatus.DisabledByPolicy)
-        {
-            DefinirEstado(Estado.Erro, "Miracast desativado por politica do Windows");
-            return;
-        }
-        if (_avisosNaoEscutando >= 2)
-        {
-            await ReiniciarReceptorAsync($"watchdog ({st})");
-        }
+        await AbrirDexAsync(manual: false);
     }
 
     // ---------------------------------------------------------------- UI
@@ -860,7 +901,7 @@ internal sealed class TrayApp : ApplicationContext
     private void MontarMenusResolucao()
     {
         var tela = TamanhoTelaPc();
-        _menuResolucao.DropDownItems.Add(ItemResolucao("Padrao do celular", ""));
+        _menuResolucao.DropDownItems.Add(ItemResolucao("Padrao (1920 x 1080)", ""));
         _menuResolucao.DropDownItems.Add(ItemResolucao($"Igual a tela do PC ({tela.Width} x {tela.Height})", "tela"));
         _menuResolucao.DropDownItems.Add(new ToolStripSeparator());
         foreach (var p in Presets)
@@ -870,6 +911,16 @@ internal sealed class TrayApp : ApplicationContext
         }
         _menuResolucao.DropDownItems.Add(new ToolStripSeparator());
         _menuResolucao.DropDownItems.Add(new ToolStripMenuItem("Personalizada...", null, (_, _) => EscolherResolucaoPersonalizada()) { Tag = "*" });
+
+        foreach (var q in Config.Qualidades)
+        {
+            var item = new ToolStripMenuItem($"{q.rotulo} ({q.cabo} Mbps no cabo / {q.wifi} no Wi-Fi)", null,
+                (_, _) => DefinirQualidade(q.id)) { Tag = q.id };
+            _menuQualidade.DropDownItems.Add(item);
+        }
+        _menuQualidade.DropDownItems.Add(new ToolStripSeparator());
+        _menuQualidade.DropDownItems.Add(new ToolStripMenuItem("Personalizada (valores do dexter.json)", null,
+            (_, _) => DefinirQualidade("")) { Tag = "" });
 
         foreach (var pct in Escalas)
         {
@@ -964,6 +1015,18 @@ internal sealed class TrayApp : ApplicationContext
         _ = ReabrirScrcpyAsync();
     }
 
+    private void DefinirQualidade(string id)
+    {
+        if (_cfg.Qualidade == id)
+        {
+            return;
+        }
+        _cfg.Qualidade = id;
+        _cfg.Salvar();
+        Log.Info($"[app] qualidade do video: {(id == "" ? "personalizada" : id)}");
+        _ = ReabrirScrcpyAsync(); // so a janela reabre; a sessao do DeX continua
+    }
+
     private void AlternarTelaCheia()
     {
         _cfg.TelaCheia = !_cfg.TelaCheia;
@@ -1007,55 +1070,6 @@ internal sealed class TrayApp : ApplicationContext
 
     // ---------------------------------------------------------------- iniciar com o Windows
 
-    private async Task AtualizarInicioAsync()
-    {
-        try
-        {
-            var tarefa = await Windows.ApplicationModel.StartupTask.GetAsync(Projeto.IdTarefaInicio);
-            _itemIniciarComWindows.Checked = tarefa.State is Windows.ApplicationModel.StartupTaskState.Enabled
-                or Windows.ApplicationModel.StartupTaskState.EnabledByPolicy;
-            _itemIniciarComWindows.Enabled = tarefa.State is not (Windows.ApplicationModel.StartupTaskState.DisabledByPolicy
-                or Windows.ApplicationModel.StartupTaskState.EnabledByPolicy);
-        }
-        catch (Exception ex)
-        {
-            // sem identidade de pacote ou manifesto sem a StartupTask
-            _itemIniciarComWindows.Enabled = false;
-            Log.Erro("lendo a tarefa de inicializacao", ex);
-        }
-    }
-
-    private async Task AlternarInicioAsync()
-    {
-        try
-        {
-            var tarefa = await Windows.ApplicationModel.StartupTask.GetAsync(Projeto.IdTarefaInicio);
-            switch (tarefa.State)
-            {
-                case Windows.ApplicationModel.StartupTaskState.Enabled:
-                    tarefa.Disable();
-                    Log.Info("[app] iniciar com o Windows: desligado");
-                    break;
-                case Windows.ApplicationModel.StartupTaskState.DisabledByUser:
-                    // o Windows nao deixa o app religar sozinho depois que o usuario desligou nas Configuracoes
-                    Avisar("Iniciar com o Windows",
-                        "Foi desligado nas Configuracoes do Windows. Ligue em Configuracoes > Aplicativos > Inicializacao > DeXter.",
-                        ToolTipIcon.Info);
-                    AbrirUri("ms-settings:startupapps");
-                    break;
-                default:
-                    var novo = await tarefa.RequestEnableAsync();
-                    Log.Info($"[app] iniciar com o Windows: {novo}");
-                    break;
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Erro("alterando a tarefa de inicializacao", ex);
-        }
-        await AtualizarInicioAsync();
-    }
-
     private static void AbrirSite() => AbrirUri(Projeto.Url);
 
     private static void AbrirUri(string uri)
@@ -1072,10 +1086,15 @@ internal sealed class TrayApp : ApplicationContext
 
     private void AtualizarMenu()
     {
-        _itemAbrir.Enabled = _scrcpy != null && _miracast.TemConexao && !_scrcpy.Aberto;
-        _itemReiniciar.Enabled = !_reiniciando;
+        var aberto = _scrcpy is { Aberto: true };
+        _itemAbrir.Text = _modoCelular ? "Voltar para o DeX" : "Abrir o DeX";
+        _itemAbrir.Enabled = _scrcpy != null && (_modoCelular || !aberto);
+        _itemCelular.Enabled = _scrcpy != null && !_modoCelular;
+        _itemEncerrarDex.Text = _modoCelular ? "Fechar a tela do celular" : "Encerrar o DeX no celular";
+        _itemEncerrarDex.Enabled = !_sessaoEncerrada;
         _itemTela.Checked = _cfg.DesligarTelaCelular;
         _itemTelaCheia.Checked = _cfg.TelaCheia;
+        _itemIniciarComWindows.Checked = IniciarComWindows.Ligado;
         foreach (ToolStripItem i in _menuResolucao.DropDownItems)
         {
             if (i is ToolStripMenuItem m && m.Tag is string valor)
@@ -1089,6 +1108,13 @@ internal sealed class TrayApp : ApplicationContext
                 }
             }
         }
+        foreach (ToolStripItem i in _menuQualidade.DropDownItems)
+        {
+            if (i is ToolStripMenuItem m && m.Tag is string id)
+            {
+                m.Checked = id == (_cfg.Qualidade ?? "");
+            }
+        }
         foreach (ToolStripItem i in _menuEscala.DropDownItems)
         {
             if (i is ToolStripMenuItem m && m.Tag is int pct)
@@ -1096,17 +1122,102 @@ internal sealed class TrayApp : ApplicationContext
                 m.Checked = pct == _cfg.EscalaDex;
             }
         }
+        foreach (ToolStripItem i in _menuSom.DropDownItems)
+        {
+            if (i is ToolStripMenuItem m && m.Tag is string som)
+            {
+                m.Checked = som == (_cfg.Som is "celular" or "ambos" ? _cfg.Som : "pc");
+            }
+        }
+        foreach (ToolStripItem i in _menuModoDex.DropDownItems)
+        {
+            if (i is ToolStripMenuItem m && m.Tag is string modo)
+            {
+                m.Checked = modo == ModoDex;
+            }
+        }
         _itemModoAuto.Checked = _cfg.Conexao == "auto";
         _itemModoUsb.Checked = _cfg.Conexao == "usb";
         _itemModoWifi.Checked = _cfg.Conexao == "wifi";
     }
 
-    private void Avisar(string titulo, string texto, ToolTipIcon tipo)
+    private void MontarMenusSomEModo()
+    {
+        foreach (var (id, rotulo) in new[]
+                 {
+                     ("pc", "No PC"),
+                     ("celular", "No celular (alto-falante ou fones do celular)"),
+                     ("ambos", "Nos dois (Android 13+)"),
+                 })
+        {
+            _menuSom.DropDownItems.Add(new ToolStripMenuItem(rotulo, null, (_, _) => DefinirSom(id)) { Tag = id });
+        }
+
+        foreach (var (id, rotulo) in new[]
+                 {
+                     ("auto", "Automatico (nativo; se nao der, compatibilidade)"),
+                     ("nativo", "Nativo (sem janelinha no celular)"),
+                     ("compatibilidade", "Compatibilidade (display simulado, com janelinha)"),
+                 })
+        {
+            _menuModoDex.DropDownItems.Add(new ToolStripMenuItem(rotulo, null, (_, _) => _ = DefinirModoDexAsync(id)) { Tag = id });
+        }
+    }
+
+    private void DefinirSom(string som)
+    {
+        if (_cfg.Som == som)
+        {
+            return;
+        }
+        _cfg.Som = som;
+        _cfg.Salvar();
+        Log.Info($"[app] som: {som}");
+        _ = ReabrirScrcpyAsync();
+    }
+
+    private async Task DefinirModoDexAsync(string modo)
+    {
+        if (ModoDex == modo)
+        {
+            return;
+        }
+        _cfg.ModoDex = modo;
+        _cfg.Salvar();
+        _nativoIndisponivel = false;
+        _falhasNativo = 0;
+        Log.Info($"[app] modo do DeX: {modo}");
+        if (_modoCelular || _sessaoEncerrada)
+        {
+            return; // vale na proxima vez que o DeX abrir
+        }
+        CancelarDescoberta();
+        await Task.Run(() => _scrcpy?.Fechar());
+        await PararDexNoCelularAsync();
+        await AbrirDexAsync(manual: true);
+    }
+
+    private void AlternarInicio()
+    {
+        try
+        {
+            var novo = !IniciarComWindows.Ligado;
+            IniciarComWindows.Definir(novo);
+            Log.Info($"[app] iniciar com o Windows: {novo}");
+        }
+        catch (Exception ex)
+        {
+            Log.Erro("alterando o inicio com o Windows", ex);
+        }
+    }
+
+    private void Avisar(string titulo, string texto, ToolTipIcon tipo, Action? aoClicar = null)
     {
         if (_saindo)
         {
             return;
         }
+        _aoClicarAviso = aoClicar;
         Log.Info($"[aviso] {titulo}: {texto}");
         _icone.ShowBalloonTip(5000, titulo, texto, tipo);
     }
@@ -1144,19 +1255,6 @@ internal sealed class TrayApp : ApplicationContext
         catch (Exception ex)
         {
             Log.Erro($"abrindo {caminho}", ex);
-        }
-    }
-
-    private static bool TemIdentidadeDePacote()
-    {
-        try
-        {
-            _ = Windows.ApplicationModel.Package.Current.Id.Name;
-            return true;
-        }
-        catch
-        {
-            return false;
         }
     }
 

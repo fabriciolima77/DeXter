@@ -5,24 +5,22 @@ namespace DeXter;
 
 /// <summary>
 /// Configuracao em dexter.json (pasta de dados do app). Criado com os padroes na primeira execucao.
-/// A tela de configuracoes completa fica para a Fase 3.
 /// </summary>
 internal sealed class Config
 {
-    /// <summary>Nome que aparece no celular na lista de TVs/monitores.</summary>
-    /// <remarks>Vazio = automatico: "DeXter - NOME-DO-PC".</remarks>
-    public string NomeTela { get; set; } = "";
+    /// <summary>
+    /// Como o DeX e aberto:
+    /// "auto" (padrao) = nativo; se o celular nao aceitar, compatibilidade;
+    /// "nativo" = o celular conecta o DeX sem fio nele mesmo (sem janelinha, sem Wi-Fi no PC);
+    /// "compatibilidade" = display simulado das Opcoes do desenvolvedor (mostra uma janelinha no celular).
+    /// </summary>
+    public string ModoDex { get; set; } = "auto";
 
-    /// <summary>Nome realmente anunciado ao celular.</summary>
-    [System.Text.Json.Serialization.JsonIgnore]
-    public string NomeTelaEfetivo
-    {
-        get
-        {
-            var nome = string.IsNullOrWhiteSpace(NomeTela) ? $"DeXter - {Environment.MachineName}" : NomeTela.Trim();
-            return nome.Length > 32 ? nome[..32] : nome; // limite do nome de dispositivo Wi-Fi Direct
-        }
-    }
+    /// <summary>Densidade (dpi) do display simulado (modo compatibilidade) com tamanho dos itens em 100%.</summary>
+    public int DensidadeSimulado { get; set; } = 200;
+
+    /// <summary>Para onde vai o som: "pc" (scrcpy toca no computador), "celular" (fica no celular/fones), "ambos".</summary>
+    public string Som { get; set; } = "pc";
 
     /// <summary>Caminho do scrcpy.exe. Vazio = usar o embutido no app (ou detectar).</summary>
     public string ScrcpyPath { get; set; } = "";
@@ -31,7 +29,7 @@ internal sealed class Config
     public string ScrcpyArgs { get; set; } =
         "--window-title=\"DeXter\" --stay-awake --video-bit-rate=16M --max-fps=60";
 
-    /// <summary>Quanto tempo esperar o display do DeX aparecer depois que o stream Miracast chega.</summary>
+    /// <summary>Quanto tempo esperar o celular/display do DeX aparecer.</summary>
     public int DescobertaSegundos { get; set; } = 40;
 
     /// <summary>Quantas vezes reabrir o scrcpy seguidas quando ele fecha com erro.</summary>
@@ -59,6 +57,20 @@ internal sealed class Config
     /// <summary>Tamanho dos itens do DeX em % da densidade original (100 = padrao; maior = itens maiores).</summary>
     public int EscalaDex { get; set; } = 100;
 
+    /// <summary>
+    /// Qualidade do video (menu Qualidade): "normal", "alta", "maxima" ou "" = personalizada
+    /// (usa so o --video-bit-rate escrito em ScrcpyArgs/ScrcpyArgsWifi).
+    /// </summary>
+    public string? Qualidade { get; set; }
+
+    /// <summary>Bitrate (Mbps) de cada qualidade: (cabo, Wi-Fi).</summary>
+    public static readonly (string id, string rotulo, int cabo, int wifi)[] Qualidades =
+    {
+        ("normal", "Normal", 16, 8),
+        ("alta", "Alta", 24, 12),
+        ("maxima", "Maxima", 40, 16),
+    };
+
     /// <summary>Abre a janela do DeX em tela cheia (scrcpy --fullscreen; Alt+F alterna).</summary>
     public bool TelaCheia { get; set; } = false;
 
@@ -76,9 +88,11 @@ internal sealed class Config
                 cfg = JsonSerializer.Deserialize<Config>(File.ReadAllText(Arquivo), Json);
             }
             cfg ??= new Config();
-            if (cfg.NomeTela == "DeXter")
+            if (cfg.Qualidade == null)
             {
-                cfg.NomeTela = ""; // antigo padrao fixo -> passa a usar o nome do PC
+                // config sem a opcao: se o bitrate e o padrao, usa "normal"; se o usuario editou, respeita a edicao
+                var padrao = cfg.ScrcpyArgs.Contains("--video-bit-rate=16M") && cfg.ScrcpyArgsWifi.Trim() == "--video-bit-rate=8M";
+                cfg.Qualidade = padrao ? "normal" : "";
             }
             cfg.Salvar(); // grava de volta para o arquivo ganhar as opcoes novas
             return cfg;

@@ -38,11 +38,15 @@ internal sealed partial class Scrcpy
     [GeneratedRegex(@"--display-id=(\d+)")]
     private static partial Regex RegexDisplay();
 
+    [GeneratedRegex(@"--display-id=(\d+)\s+\((\d+)x(\d+)\)")]
+    private static partial Regex RegexDisplayTamanho();
+
     /// <summary>
     /// Espera o display do DeX aparecer. Regra (a mesma do dex.ps1): maior id diferente de 0.
     /// Prefere ids que nao existiam antes da conexao (linhaDeBase), se houver.
     /// </summary>
-    public async Task<int?> DescobrirDisplayAsync(string serial, IReadOnlySet<int> linhaDeBase, TimeSpan limite, CancellationToken ct)
+    public async Task<int?> DescobrirDisplayAsync(string serial, IReadOnlySet<int> linhaDeBase, TimeSpan limite, CancellationToken ct,
+        Size? tamanhoEsperado = null)
     {
         var fim = DateTime.UtcNow + limite;
         var tentativa = 0;
@@ -51,6 +55,27 @@ internal sealed partial class Scrcpy
             tentativa++;
             var (ids, saida) = await ListarDisplaysAsync(serial, ct);
             var candidatos = ids.Where(i => i != 0).ToList();
+
+            // display simulado: escolhe o que tem exatamente o tamanho pedido
+            if (tamanhoEsperado is { } t)
+            {
+                var porTamanho = RegexDisplayTamanho().Matches(saida)
+                    .Select(m => (id: int.Parse(m.Groups[1].Value), w: int.Parse(m.Groups[2].Value), h: int.Parse(m.Groups[3].Value)))
+                    .Where(d => d.id != 0 && ((d.w == t.Width && d.h == t.Height) || (d.w == t.Height && d.h == t.Width)))
+                    .Select(d => d.id)
+                    .ToList();
+                if (porTamanho.Count > 0)
+                {
+                    var idT = porTamanho.Max();
+                    Log.Info($"[scrcpy] display simulado encontrado: {idT} ({t.Width}x{t.Height}; tentativa {tentativa})");
+                    return idT;
+                }
+                if (tentativa < 6)
+                {
+                    candidatos.Clear(); // espera uns segundos pelo display com o tamanho certo...
+                }
+                // ...depois aceita o maior id != 0 (caso o celular informe outro tamanho)
+            }
             var novos = candidatos.Where(i => !linhaDeBase.Contains(i)).ToList();
 
             if (novos.Count > 0 || candidatos.Count > 0)

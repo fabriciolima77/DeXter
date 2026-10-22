@@ -11,7 +11,7 @@
 
 ---
 
-Samsung's official "DeX for PC" app stopped working on recent One UI versions because the phone-side service it relied on was removed. DeXter brings DeX back to Windows a different way, using only public Windows and Android features.
+Samsung's official "DeX for PC" app stopped working on recent One UI versions because the phone-side service it relied on was removed. DeXter brings DeX back to Windows using only adb (USB cable or Wi-Fi): no root, nothing installed on the phone, and no Wi-Fi or Miracast needed on the PC.
 
 > DeXter is an independent project and **is not affiliated with Samsung**. "Samsung DeX" is a trademark of Samsung Electronics.
 
@@ -19,54 +19,54 @@ Samsung's official "DeX for PC" app stopped working on recent One UI versions be
 
 ## How it works
 
-1. DeXter makes your PC show up on the phone as a **Miracast TV** named after the computer, e.g. "DeXter - DESKTOP-ABC123".
-2. You start **wireless DeX** to that "TV". Samsung creates the DeX desktop on its own display.
-3. DeXter finds that display and opens it in a window with [scrcpy](https://github.com/Genymobile/scrcpy) (bundled): video, mouse, keyboard, clipboard and drag-and-drop.
+1. Over adb, DeXter runs a small server on the phone (the same way scrcpy does).
+2. The server makes Samsung's "wireless DeX" connect **to the phone itself** (127.0.0.1), so Samsung creates the DeX desktop on a real display.
+3. DeXter shows that display in a Windows window with [scrcpy](https://github.com/Genymobile/scrcpy) (bundled): video, mouse, keyboard, clipboard and drag-and-drop.
 
-It all runs from the system tray. It opens DeX automatically, reconnects when something drops, and shuts everything down cleanly on exit.
+This Wi-Fi Display "loopback" technique comes from [ScrcpyDeX](https://github.com/Aureliano021/ScrcpyDex) by Aureliano Peixoto (Apache 2.0).
+
+If the phone doesn't accept it, DeXter falls back to a **compatibility mode**: a simulated display from the developer options. DeX opens there too, but a small floating window shows up on the phone screen.
 
 ## Requirements
 
-- Windows 10 version 2004 (build 19041) or newer, or Windows 11
-- Miracast-capable Wi-Fi (most laptops)
-- Samsung phone with **wireless DeX**
+- Windows 10 or 11 (64-bit)
+- Samsung phone with **DeX** (Android 11 or newer)
 - **USB debugging** enabled on the phone
 
 ## Install
 
-1. Download **DeXter-x.y.z-x64.zip** from [Releases](https://github.com/fabriciolima77/DeXter/releases/latest) and extract it.
-2. Double-click **Instalar.cmd**.
-
-The package is signed with the project's own self-signed certificate. On first install, Windows asks for administrator permission to trust it (the installer adds `DeXter.cer` to *Trusted People* and *Trusted Root*). Don't open the `.msix` directly, or Windows rejects it with error 0x800B010A. `DeXter.cer` and `SHA256SUMS.txt` are attached to every release.
+No installation: download **DeXter-x.y.z-win-x64.zip** from [Releases](https://github.com/fabriciolima77/DeXter/releases/latest), extract it and run **DeXter.exe**. The app is not signed, so Windows may show "Windows protected your PC": click *More info → Run anyway*. Settings live in `%LOCALAPPDATA%\DeXter`.
 
 ## Use
 
-1. Close the Windows **Connect** app if it is open (only one Miracast receiver can run at a time).
-2. Start **DeXter** from the Start menu, or run `dexter`. A tray icon appears.
-3. Connect the phone by USB, or set up Wi-Fi from the tray menu (*Conexão com o celular*). You can pair once with wireless debugging and never use the cable again.
-4. On the phone: **DeX → connect to TV/monitor → DeXter - (your PC name)**. The DeX window opens by itself.
+1. Run **DeXter.exe**. A tray icon appears.
+2. Connect the phone by USB, or set up Wi-Fi from the tray menu (*Conexão com o celular*). You can pair once with wireless debugging and never use the cable again. You can even unplug the cable mid-session: DeX keeps running and the window comes back over Wi-Fi.
+3. DeX opens in the window by itself. When DeXter exits, the phone goes back to normal.
 
-While DeX is open, DeXter turns the phone screen off without locking it. Don't press the phone's power button: locking the phone locks DeX too. Use **Alt+O** / **Alt+Shift+O** in the DeX window to turn the phone screen off or on.
+The tray menu also lets you:
+- switch to the **plain phone screen** (no DeX) and back;
+- turn the phone screen off without locking it (don't press the phone's power button: locking the phone locks DeX too);
+- change the **DeX resolution** (match your PC screen, presets up to 3440×1440 ultrawide, or custom), **UI scale**, **video quality**, **sound output** (PC, phone/headphones, or both) and **fullscreen**;
+- pick the **DeX mode** (automatic, native, or compatibility).
 
-The tray menu also lets you change the **DeX desktop resolution** (phone default, match your PC screen, presets up to 3440×1440 ultrawide, or custom), the **UI scale**, and open in **fullscreen** (Alt+F toggles). The resolution is changed on the phone's DeX display itself (`wm size`), so you get real extra desktop space. It is restored when DeXter exits.
-
-See the [Portuguese README](README.pt-BR.md) for the tray icon states, Wi-Fi setup details, settings and troubleshooting.
+See the [Portuguese README](README.pt-BR.md) for details and troubleshooting.
 
 ## Build from source
 
-Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) and Windows **Developer Mode**. The [Windows SDK](https://developer.microsoft.com/windows/downloads/windows-sdk/) is also needed to build the installer.
+Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0), a JDK 11+ and the Android SDK (`platforms;android-35` and `build-tools;35.0.0`) for the native DeX server.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\dev.ps1                   # build + register "DeXter (dev)"
-powershell -ExecutionPolicy Bypass -File scripts\pack.ps1 -Versao 0.3.0    # signed MSIX + zip in dist\
+powershell -ExecutionPolicy Bypass -File scripts\dev.ps1                   # build (app + server) and run
+powershell -ExecutionPolicy Bypass -File scripts\pack.ps1 -Versao 0.5.0    # portable zip in dist\
 ```
 
-The first build downloads the official scrcpy release (which includes adb) into `vendor\`. The app needs **package identity** to use the Windows Miracast API, so it always runs as a package, never as a loose `.exe`.
-
-Releases are built by GitHub Actions when a `vX.Y.Z` tag is pushed.
+Without a JDK/Android SDK the app still builds, but only the compatibility mode works. Releases are built by GitHub Actions when a `vX.Y.Z` tag is pushed.
 
 ## License and credits
 
 DeXter © 2026 [fabriciolima77](https://github.com/fabriciolima77), licensed under the **GNU GPL v3.0 or later** ([LICENSE](LICENSE)).
 
-Bundles unmodified [scrcpy](https://github.com/Genymobile/scrcpy) (Apache 2.0) and Android adb. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- The server in `server/` is derived from [ScrcpyDeX](https://github.com/Aureliano021/ScrcpyDex) © 2026 Aureliano Peixoto and contributors, under the **Apache License 2.0** ([server/LICENSE-ScrcpyDeX.txt](server/LICENSE-ScrcpyDeX.txt)).
+- Bundles unmodified [scrcpy](https://github.com/Genymobile/scrcpy) (Apache 2.0) and Android adb.
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -68,7 +68,7 @@ internal sealed partial class Adb
     /// Escolhe o celular conforme o modo ("auto", "usb", "wifi").
     /// Sem dispositivo Wi-Fi conectado, tenta reconectar (endereco salvo, depois mDNS da depuracao sem fio).
     /// </summary>
-    public async Task<Dispositivo?> EscolherAsync(string modo, string enderecoSalvo, CancellationToken ct)
+    public async Task<Dispositivo?> EscolherAsync(string modo, string enderecoSalvo, CancellationToken ct, bool reconectarWifi = true)
     {
         var lista = await ListarAsync(ct);
         foreach (var d in lista.Where(d => !d.Pronto))
@@ -95,7 +95,7 @@ internal sealed partial class Adb
         }
 
         // Nenhum Wi-Fi pronto: tenta reconectar
-        if (await ReconectarWifiAsync(enderecoSalvo, ct))
+        if (reconectarWifi && await ReconectarWifiAsync(enderecoSalvo, ct))
         {
             lista = await ListarAsync(ct);
             return lista.FirstOrDefault(d => d.Pronto && d.Wifi);
@@ -121,6 +121,7 @@ internal sealed partial class Adb
 
             foreach (var end in enderecos.Distinct())
             {
+                await DesconectarAsync(end, ct); // limpa conexao travada
                 if (await ConectarAsync(end, ct))
                 {
                     return true;
@@ -223,6 +224,48 @@ internal sealed partial class Adb
         Log.Info($"[adb] display {displayId}: tamanho {tamanho}, densidade {dens} -> {(ok ? "OK" : (s1 + s2).Trim())}");
         return ok;
     }
+
+    // ------------------------------------------------------------ display simulado
+    // Opcoes do desenvolvedor > "Simular telas secundarias" (settings global overlay_display_devices).
+    // O DeX da Samsung abre nesse display, entao o Miracast deixa de ser necessario.
+
+    /// <summary>Valor atual de overlay_display_devices (null = nenhum display simulado).</summary>
+    public async Task<string?> LerDisplaySimuladoAsync(string serial, CancellationToken ct)
+    {
+        var (_, saida) = await RodarAsync($"{Sel(serial)}shell settings get global overlay_display_devices", 8_000, ct);
+        var v = saida.Trim();
+        return v.Length == 0 || v == "null" ? null : v;
+    }
+
+    /// <summary>Cria/troca o display simulado ("LxA/dpi") ou remove (null).</summary>
+    public async Task<bool> DefinirDisplaySimuladoAsync(string serial, string? valor, CancellationToken ct)
+    {
+        var cmd = valor == null
+            ? "settings delete global overlay_display_devices"
+            : $"settings put global overlay_display_devices {valor}";
+        var (codigo, saida) = await RodarAsync($"{Sel(serial)}shell {cmd}", 8_000, ct);
+        var ok = codigo == 0 && !saida.Contains("Exception", StringComparison.OrdinalIgnoreCase)
+                 && !saida.Contains("Error", StringComparison.OrdinalIgnoreCase);
+        Log.Info($"[adb] display simulado {(valor ?? "removido")} -> {(ok ? "OK" : saida.Trim())}");
+        return ok;
+    }
+
+    /// <summary>adb shell no celular indicado. O comando nao pode ter aspas duplas.</summary>
+    public Task<(int codigo, string saida)> ShellAsync(string serial, string comando, int limiteMs, CancellationToken ct) =>
+        RodarAsync($"{Sel(serial)}shell \"{comando}\"", limiteMs, ct);
+
+    /// <summary>adb push de um arquivo do PC para o celular.</summary>
+    public async Task<bool> PushAsync(string serial, string local, string remoto, CancellationToken ct)
+    {
+        var (codigo, saida) = await RodarAsync($"{Sel(serial)}push \"{local}\" {remoto}", 30_000, ct);
+        var ok = codigo == 0;
+        Log.Info($"[adb] push {Path.GetFileName(local)} -> {remoto}: {(ok ? "OK" : saida.Trim())}");
+        return ok;
+    }
+
+    /// <summary>Desconecta um endereco Wi-Fi antigo/travado antes de reconectar (como no script do usuario).</summary>
+    public Task DesconectarAsync(string endereco, CancellationToken ct) =>
+        RodarAsync($"disconnect {endereco}", 5_000, ct);
 
     private static string Sel(string serial) => string.IsNullOrEmpty(serial) ? "" : $"-s {serial} ";
 

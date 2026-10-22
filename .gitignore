@@ -8,7 +8,11 @@ vendor/
 .vs/
 .vscode/
 
-# chave privada de assinatura: NUNCA commitar
+# servidor Java compilado (gerado por server/build-server.ps1)
+server/build/
+server/dexter-server.jar
+
+# certificado da antiga versao MSIX (nao e mais usado)
 cert/
 *.pfx
 

@@ -11,129 +11,165 @@
 
 ---
 
-O app oficial "Samsung DeX para PC" parou de funcionar nas versões recentes da One UI: o serviço do celular que ele usava foi removido. O DeXter traz o DeX de volta para o Windows de outro jeito, usando só recursos públicos do Windows e do Android.
+O app oficial "Samsung DeX para PC" parou de funcionar nas versões recentes da One UI: o serviço do celular que ele usava foi removido. O DeXter traz o DeX de volta para o Windows usando só o adb (cabo USB ou Wi-Fi), sem root, sem instalar nada no celular e sem precisar de Wi-Fi ou Miracast no PC.
 
 > O DeXter é um projeto independente e **não tem afiliação com a Samsung**. "Samsung DeX" é marca da Samsung Electronics.
 
 ## Como funciona
 
-1. O DeXter faz o PC se apresentar ao celular como uma **TV Miracast** com o nome do computador, por exemplo "DeXter - DESKTOP-ABC123".
-2. No celular você inicia o **DeX sem fio** nessa "TV". A Samsung cria a área de trabalho do DeX num display próprio.
-3. O DeXter descobre esse display e abre o DeX numa janela com o [scrcpy](https://github.com/Genymobile/scrcpy) (embutido), com vídeo, mouse, teclado, área de transferência e arrastar arquivos.
+1. Pelo adb, o DeXter roda no celular um pequeno servidor (como o scrcpy faz).
+2. O servidor faz o "DeX sem fio" da Samsung se conectar **no próprio celular** (127.0.0.1). A Samsung cria a área de trabalho do DeX num display de verdade.
+3. O DeXter mostra esse display numa janela do Windows com o [scrcpy](https://github.com/Genymobile/scrcpy) (embutido), com vídeo, mouse, teclado, área de transferência e arrastar arquivos.
 
-Tudo roda na bandeja do sistema: abre o DeX sozinho, reconecta se cair e fecha tudo direito ao sair.
+Essa técnica (o "loopback" do Wi-Fi Display) vem do projeto [ScrcpyDeX](https://github.com/Aureliano021/ScrcpyDex), de Aureliano Peixoto (Apache 2.0).
+
+Se o celular não aceitar esse modo, o DeXter usa o **modo compatibilidade**: um display simulado das Opções do desenvolvedor, que também abre o DeX, mas mostra uma janelinha flutuante na tela do celular.
+
+Tudo roda na bandeja do sistema: abre o DeX sozinho quando o celular aparece, reconecta se cair e, ao sair, devolve o celular ao normal.
 
 ## Requisitos
 
-- Windows 10 versão 2004 (build 19041) ou mais novo, ou Windows 11
-- Placa Wi-Fi compatível com Miracast (a maioria dos notebooks)
-- Celular Samsung com **DeX sem fio**
+- Windows 10 ou 11 (64 bits)
+- Celular Samsung com **DeX** (Android 11 ou mais novo)
 - **Depuração USB** ligada no celular (Configurações → Sobre o telefone → Informações do software → toque 7 vezes em "Número de compilação"; depois Opções do desenvolvedor → Depuração USB)
 
 ## Instalação
 
-1. Baixe o **DeXter-x.y.z-x64.zip** na página de [releases](https://github.com/fabriciolima77/DeXter/releases/latest) e extraia.
-2. Clique duas vezes em **Instalar.cmd**.
+Não precisa instalar:
 
-O pacote é assinado com um certificado do próprio projeto (autoassinado). Na primeira instalação, o Windows pede permissão de administrador para confiar nesse certificado. O `DeXter.cer` e os hashes (`SHA256SUMS.txt`) estão em cada release.
+1. Baixe o **DeXter-x.y.z-win-x64.zip** na página de [releases](https://github.com/fabriciolima77/DeXter/releases/latest).
+2. Extraia numa pasta (por exemplo `C:\DeXter`) e abra o **DeXter.exe**.
 
-Para atualizar, rode o Instalar.cmd da versão nova. Para desinstalar, use Configurações → Aplicativos ou o `Desinstalar.ps1`.
+O app não é assinado, então na primeira vez o Windows pode mostrar **"O Windows protegeu o computador"**: clique em *Mais informações → Executar assim mesmo*. O hash do zip está no `SHA256SUMS.txt` de cada release.
+
+Para atualizar, feche o DeXter (menu → Sair) e troque a pasta pela da versão nova. As configurações ficam em `%LOCALAPPDATA%\DeXter`.
+
+> Quem usava a versão 0.3.x (instalada como pacote): desinstale antes em Configurações → Aplicativos → DeXter.
 
 ## Uso
 
-1. Feche o app **Conectar** do Windows, se estiver aberto (só um receptor Miracast roda por vez).
-2. Abra o **DeXter** (menu Iniciar ou comando `dexter`). O ícone aparece na bandeja.
-3. Conecte o celular no cabo USB, ou prepare o Wi-Fi (veja abaixo).
-4. No celular: **DeX → conectar a TV/monitor → DeXter - (nome do seu PC)**. A janela do DeX abre sozinha.
+1. Abra o **DeXter.exe**. O ícone aparece na bandeja, perto do relógio.
+2. Conecte o celular no cabo USB, ou prepare o Wi-Fi (veja abaixo). Na primeira vez, aceite a autorização de depuração na tela do celular.
+3. O DeX abre sozinho na janela.
 
 ### Ícone da bandeja
 
 | Bolinha | Estado |
 |---|---|
 | cinza | iniciando |
-| azul | aguardando o celular |
-| amarela | conectando / procurando o DeX |
-| verde | DeX aberto |
-| verde-clara | DeX conectado, janela fechada (clique duas vezes para abrir) |
+| azul | esperando o celular (cabo ou Wi-Fi) |
+| amarela | abrindo o DeX |
+| verde | DeX (ou a tela do celular) aberto |
+| verde-clara | janela fechada ou DeX encerrado (clique duas vezes para abrir) |
 | vermelha | erro (passe o mouse para ver o motivo) |
 
-Menu: abrir a janela do DeX, reiniciar o receptor, apagar a tela do celular, resolução e tamanho dos itens do DeX, tela cheia, conexão com o celular (USB/Wi-Fi), iniciar com o Windows, log e configuração.
+### Menu
+
+- **Abrir o DeX** / **Abrir a tela do celular (sem DeX)**: alterna entre o DeX e a tela normal do celular. Na tela do celular o teclado do PC funciona como teclado físico (`--keyboard=uhid`).
+- **Encerrar o DeX no celular**: fecha a janela e devolve o celular ao normal. Clique duas vezes no ícone para abrir de novo.
+- **Apagar a tela do celular durante o uso**, **Resolução do DeX**, **Tamanho dos itens do DeX**, **Qualidade do vídeo**, **Som**, **Abrir em tela cheia**.
+- **Conexão com o celular**: USB, Wi-Fi ou automático; pareamento sem cabo.
+- **Modo do DeX**: automático, nativo ou compatibilidade.
+- **Iniciar com o Windows**, **Abrir log**, **Abrir configuração**.
 
 ### Sem cabo (Wi-Fi)
 
-O vídeo do DeX já vai por Wi-Fi. O cabo só é usado para controle. Para dispensá-lo, o celular e o PC precisam estar na mesma rede. Use o menu **Conexão com o celular**:
+Tudo o que o cabo faz, o adb também faz pela rede: celular e PC na mesma rede (o PC pode estar até no cabo de rede). Menu **Conexão com o celular**:
 
 - **Parear sem cabo**: feito uma vez só. No celular: Opções do desenvolvedor → Depuração sem fio → *Parear dispositivo com código de pareamento*. Digite o IP:porta e o código. Depois disso o DeXter acha o celular sozinho, inclusive depois de reiniciar, se a Depuração sem fio estiver ligada.
 - **Preparar Wi-Fi pelo cabo**: um clique com o cabo ligado. Vale até o celular reiniciar.
 
-No modo **Automático** (padrão), o DeXter usa o cabo se estiver ligado e o Wi-Fi se não estiver. Pode tirar o cabo no meio do uso.
+No modo **Automático** (padrão), o DeXter usa o cabo se estiver ligado e o Wi-Fi se não estiver. Pode tirar o cabo no meio do uso: o DeX continua no celular e a janela volta pelo Wi-Fi.
+
+### Som
+
+Menu **Som**:
+- **No PC** (padrão): o som do celular toca no computador.
+- **No celular**: o som fica no celular (alto-falante ou fones conectados nele). No modo nativo, escolha também a saída de mídia nas configurações do DeX/Android.
+- **Nos dois** (Android 13+).
 
 ### Tela do celular
 
-Enquanto o DeX está aberto, o DeXter apaga a tela do celular sem bloqueá-lo e impede que ele bloqueie por inatividade. **Não aperte o botão power** do celular durante o uso: bloquear o celular bloqueia o DeX junto (é a segurança do Android). Atalhos na janela: **Alt+O** apaga a tela do celular e **Alt+Shift+O** acende.
+Enquanto a janela está aberta, o DeXter apaga a tela do celular sem bloqueá-lo e impede que ele bloqueie por inatividade. **Não aperte o botão power** do celular durante o uso: bloquear o celular bloqueia o DeX junto (é a segurança do Android). Atalhos na janela: **Alt+O** apaga a tela do celular e **Alt+Shift+O** acende.
 
-### Resolução e tela cheia
+### Resolução, qualidade e tela cheia
 
-No menu do ícone:
-
-- **Resolução do DeX**: padrão do celular, **igual à tela do PC** (ideal com tela cheia), presets de 1280×720 a 3440×1440 (ultrawide) ou personalizada. O DeXter muda a resolução do display do DeX no próprio celular (`wm size`), então a área de trabalho ganha mais espaço de verdade, sem só esticar a imagem.
+- **Resolução do DeX**: padrão (1920×1080), **igual à tela do PC** (ideal com tela cheia), presets de 1280×720 a 3440×1440 (ultrawide) ou personalizada. É a resolução real da área de trabalho do DeX, então ela ganha espaço de verdade.
 - **Tamanho dos itens do DeX**: de 75% (mais espaço) a 150% (itens maiores).
+- **Qualidade do vídeo**: Normal (16 Mbps no cabo / 8 no Wi-Fi), Alta (24 / 12) ou Máxima (40 / 16). Se o mouse começar a atrasar, baixe um nível.
 - **Abrir em tela cheia**: dentro da janela, **Alt+F** alterna.
 
-As mudanças reabrem a janela do DeX na hora. Ao sair do DeXter, o celular volta à resolução original.
+As mudanças reabrem a janela na hora. Ao sair, o celular volta ao normal.
+
+### Modo do DeX
+
+| Modo | Como funciona | Janelinha no celular |
+|---|---|---|
+| **Automático** (padrão) | Nativo; se o celular não aceitar, compatibilidade | depende |
+| **Nativo** | DeX sem fio conectado no próprio celular (loopback) | não |
+| **Compatibilidade** | Display simulado das Opções do desenvolvedor | sim (some com a tela apagada) |
 
 ### Configuração avançada
 
-Menu → **Abrir configuração** (`dexter.json`): nome da tela (`NomeTela`; vazio = "DeXter - nome do PC"), argumentos do scrcpy (qualidade, FPS, resolução), argumentos extras por Wi-Fi, tempo de tela, tempo de espera e tentativas. Reinicie o DeXter depois de editar.
+Menu → **Abrir configuração** (`dexter.json`, em `%LOCALAPPDATA%\DeXter`): `ModoDex`, `Som`, `DensidadeSimulado` (densidade do modo compatibilidade, padrão 200), argumentos do scrcpy (`ScrcpyArgs`, `ScrcpyArgsWifi`), tempo de tela, tempo de espera e tentativas. Reinicie o DeXter depois de editar.
 
 ## Problemas comuns
 
 | Sintoma | O que fazer |
 |---|---|
-| "Receptor Miracast não iniciou" / AccessDenied | Feche o app Conectar e qualquer outro receptor Miracast; desative "Projetar neste PC" nas Configurações. O log lista os processos suspeitos. |
-| "DeXter - (nome do PC)" não aparece no celular | Confira se o Wi-Fi do PC está ligado e se o ícone está azul. Use "Reiniciar receptor". |
+| "O Windows protegeu o computador" | *Mais informações → Executar assim mesmo*. O app não é assinado. |
 | "Celular não encontrado pelo adb" | Cabo conectado com Depuração USB ligada, ou Wi-Fi preparado. Na primeira vez, aceite a autorização na tela do celular. |
-| Erro 0x800B010A ao instalar | O certificado do projeto não está confiável. Instale pelo **Instalar.cmd** (não abra o `.msix` direto); ele coloca o `DeXter.cer` em "Pessoas Confiáveis" e em "Autoridades de Certificação Raiz Confiáveis". |
-| Vídeo travando por Wi-Fi | Diminua `ScrcpyArgsWifi` no `dexter.json` (ex.: `--video-bit-rate=4M --max-size=1600`). |
+| Aviso "Usando o modo compatibilidade" | O celular não aceitou o DeX nativo. O motivo está no log (linhas `[nativo]`). O DeX funciona, mas com a janelinha no celular. |
+| Ficou uma janelinha do DeX na tela do celular | É o display simulado do modo compatibilidade. O DeXter remove ao sair; se ele foi fechado à força, rode `adb shell settings delete global overlay_display_devices`. |
+| O DeX nativo ficou aberto no celular depois de fechar o DeXter à força | Rode `adb shell pkill -f dexter.server.Server`, ou desconecte o DeX pelo painel de notificações do celular. |
+| Sem som | Menu → Som. No modo "No celular", confira a saída de mídia do DeX/Android. |
+| Vídeo travando por Wi-Fi | Menu → Qualidade do vídeo → Normal, ou diminua `ScrcpyArgsWifi` no `dexter.json`. |
 
 O log fica em Menu → **Abrir log**.
 
 ## Compilar a partir do código
 
-Requisitos: [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0), Windows com **Modo de desenvolvedor** ligado. Para gerar o instalador também é preciso o [Windows SDK](https://developer.microsoft.com/windows/downloads/windows-sdk/).
+Requisitos:
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- JDK 11 ou mais novo (para o servidor do DeX nativo)
+- Android SDK com uma plataforma e build-tools: `sdkmanager "platforms;android-35" "build-tools;35.0.0"` (o Android Studio já instala). O script procura em `ANDROID_HOME`, `ANDROID_SDK_ROOT` ou `%LOCALAPPDATA%\Android\Sdk`.
 
 ```powershell
-# compilar e registrar a versão de desenvolvimento ("DeXter (dev)", comando dexter-dev)
+# compilar (app + servidor) e abrir
 powershell -ExecutionPolicy Bypass -File scripts\dev.ps1
 
-# gerar o instalador (MSIX assinado + zip) em dist\
-powershell -ExecutionPolicy Bypass -File scripts\pack.ps1 -Versao 0.3.0
+# so o servidor do DeX nativo (server\dexter-server.jar)
+powershell -ExecutionPolicy Bypass -File server\build-server.ps1
+
+# gerar o zip portatil em dist\
+powershell -ExecutionPolicy Bypass -File scripts\pack.ps1 -Versao 0.5.0
 ```
 
-Na primeira compilação, o build baixa o pacote oficial do scrcpy (com o adb) para `vendor\`.
-
-O app precisa de **identidade de pacote** para usar a API Miracast do Windows. Por isso ele sempre roda como pacote (MSIX, ou registrado em modo desenvolvedor), nunca como `.exe` solto.
+Sem JDK/Android SDK o app compila mesmo assim, mas só funciona no modo compatibilidade. Na primeira compilação, o build baixa o pacote oficial do scrcpy (com o adb) para `vendor\`.
 
 ### Estrutura
 
 ```
 src/DeXter/          app (C#/.NET 8, WinForms na bandeja)
-  TrayApp.cs         bandeja, estados, reconexão, watchdog
-  MiracastHost.cs    receptor Miracast (Windows.Media.Miracast)
-  Scrcpy.cs          descoberta do display do DeX + processo do scrcpy
-  Adb.cs             USB/Wi-Fi, pareamento, mDNS
-packaging/           manifesto do pacote, ícones, certificado público, instalador
-scripts/             dev.ps1, pack.ps1, New-Certificado.ps1
+  TrayApp.cs         bandeja, modos, reconexao, watchdog
+  DexNativo.cs       envia e controla o servidor do DeX nativo no celular
+  Scrcpy.cs          descoberta do display + processo do scrcpy
+  Adb.cs             USB/Wi-Fi, pareamento, mDNS, display simulado
+server/              servidor Java do DeX nativo (roda no celular via app_process)
+packaging/           icones e o leia-me do zip
+scripts/             dev.ps1, pack.ps1
 .github/workflows/   build a cada push; release a cada tag vX.Y.Z
 ```
 
 ### Publicar uma versão (mantenedor)
 
-1. Uma vez: `scripts\New-Certificado.ps1`. Commite o `packaging\DeXter.cer` e cadastre os secrets `SIGNING_PFX_BASE64` e `SIGNING_PFX_PASSWORD` no GitHub.
-2. A cada versão: `git tag v0.3.0 && git push origin v0.3.0`. O GitHub Actions compila, assina e publica o release.
+`git tag v0.5.0 && git push origin v0.5.0`. O GitHub Actions compila o servidor e o app, gera o zip e publica o release.
 
 ## Licença e créditos
 
 DeXter © 2026 [fabriciolima77](https://github.com/fabriciolima77), licenciado sob a **GNU GPL v3.0 ou posterior** ([LICENSE](LICENSE)).
 
-Inclui o [scrcpy](https://github.com/Genymobile/scrcpy) (Apache 2.0) e o adb do Android, sem modificações. Veja [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- O servidor em `server/` é derivado do [ScrcpyDeX](https://github.com/Aureliano021/ScrcpyDex) © 2026 Aureliano Peixoto e colaboradores, sob a **Apache License 2.0** ([server/LICENSE-ScrcpyDeX.txt](server/LICENSE-ScrcpyDeX.txt)).
+- Inclui o [scrcpy](https://github.com/Genymobile/scrcpy) (Apache 2.0) e o adb do Android, sem modificações.
+
+Veja [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

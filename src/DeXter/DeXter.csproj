@@ -3,18 +3,18 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <UseWindowsForms>true</UseWindowsForms>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <!-- sem APIs WinRT: roda como .exe comum, sem pacote nem assinatura -->
+    <TargetFramework>net8.0-windows</TargetFramework>
     <RootNamespace>DeXter</RootNamespace>
     <AssemblyName>DeXter</AssemblyName>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <!-- framework-dependent no dia a dia; o pack.ps1 publica self-contained para o MSIX -->
+    <!-- framework-dependent no dia a dia; o pack.ps1 publica self-contained (zip portatil) -->
     <SelfContained>false</SelfContained>
     <ApplicationIcon>..\..\packaging\Assets\DeXter.ico</ApplicationIcon>
     <!-- versao vem do pack.ps1 / tag do GitHub (-p:Version=x.y.z) -->
-    <Version>0.3.0</Version>
+    <Version>0.5.0</Version>
     <Product>DeXter</Product>
     <Description>Usa o Samsung DeX numa janela do Windows</Description>
     <Copyright>Copyright (C) 2026 fabriciolima77 - GPL-3.0-or-later</Copyright>
@@ -24,6 +24,33 @@
   <ItemGroup>
     <EmbeddedResource Include="..\..\packaging\Assets\DeXter-256.png" LogicalName="DeXter.Icone.png" />
   </ItemGroup>
+
+  <!-- Servidor do DeX nativo (Java, roda no celular). Compilado por server\build-server.ps1
+       (precisa de JDK + Android SDK). Sem ele, o app usa so o modo compatibilidade. -->
+  <PropertyGroup>
+    <ServidorDir>$(MSBuildThisFileDirectory)..\..\server\</ServidorDir>
+    <ServidorJar>$(ServidorDir)dexter-server.jar</ServidorJar>
+  </PropertyGroup>
+  <ItemGroup>
+    <ServidorFontes Include="$(ServidorDir)src\**\*.java" />
+  </ItemGroup>
+
+  <Target Name="CompilarServidor" BeforeTargets="Build" Inputs="@(ServidorFontes)" Outputs="$(ServidorJar)"
+          Condition="'$(PularServidor)' != 'true'">
+    <Message Importance="high" Text="Compilando o servidor do DeX nativo (server\build-server.ps1)..." />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ServidorDir)build-server.ps1&quot;"
+          ContinueOnError="true" />
+    <Warning Condition="!Exists('$(ServidorJar)')"
+             Text="dexter-server.jar nao foi gerado (falta JDK ou Android SDK?). O DeXter vai usar so o modo compatibilidade." />
+  </Target>
+
+  <Target Name="CopiarServidor" AfterTargets="Build" DependsOnTargets="CompilarServidor" Condition="Exists('$(ServidorJar)')">
+    <Copy SourceFiles="$(ServidorJar)" DestinationFolder="$(OutDir)server" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="PublicarServidor" AfterTargets="Publish" Condition="Exists('$(ServidorJar)')">
+    <Copy SourceFiles="$(ServidorJar)" DestinationFolder="$(PublishDir)server" SkipUnchangedFiles="true" />
+  </Target>
 
   <!-- scrcpy + adb embutidos: o build baixa o pacote oficial do scrcpy para vendor\ (uma vez)
        e copia para scrcpy\ ao lado do exe (build e publish). Para trocar de versao, mude ScrcpyVersion. -->
