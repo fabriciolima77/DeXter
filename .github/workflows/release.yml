@@ -1,6 +1,6 @@
 # Gera e publica um release quando uma tag vX.Y.Z e enviada:
-#   git tag v0.3.0 && git push origin v0.3.0
-# Precisa dos secrets SIGNING_PFX_BASE64 e SIGNING_PFX_PASSWORD (scripts/New-Certificado.ps1).
+#   git tag v0.5.0 && git push origin v0.5.0
+# Resultado: DeXter-<versao>-win-x64.zip (portatil, sem instalacao) + SHA256SUMS.txt
 name: Release
 
 on:
@@ -26,6 +26,18 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK (plataforma + build-tools)
+        shell: pwsh
+        run: |
+          $sdkm = Join-Path $env:ANDROID_HOME 'cmdline-tools\latest\bin\sdkmanager.bat'
+          (1..20 | ForEach-Object { 'y' }) | & $sdkm --licenses | Out-Null
+          & $sdkm --install "platforms;android-35" "build-tools;35.0.0" | Out-Null
+
       - name: Versao
         shell: pwsh
         run: |
@@ -40,11 +52,8 @@ jobs:
           path: vendor
           key: scrcpy-${{ hashFiles('src/DeXter/DeXter.csproj') }}
 
-      - name: Gerar MSIX assinado
+      - name: Gerar o zip portatil
         shell: pwsh
-        env:
-          SIGNING_PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
-          SIGNING_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
         run: ./scripts/pack.ps1 -Versao $env:VERSAO
 
       - uses: actions/upload-artifact@v4
@@ -59,14 +68,13 @@ jobs:
           name: DeXter ${{ env.VERSAO }}
           generate_release_notes: true
           files: |
-            dist/DeXter-${{ env.VERSAO }}-x64.zip
-            dist/DeXter-${{ env.VERSAO }}-x64.msix
-            dist/DeXter.cer
+            dist/DeXter-${{ env.VERSAO }}-win-x64.zip
             dist/SHA256SUMS.txt
           body: |
-            ## Como instalar
-            1. Baixe **DeXter-${{ env.VERSAO }}-x64.zip** e extraia.
-            2. Clique duas vezes em **Instalar.cmd** (na primeira vez o Windows pede permissão de administrador para confiar no certificado do projeto).
-            3. Abra o DeXter pelo menu Iniciar; no celular: DeX → conectar a TV/monitor → **DeXter - (nome do seu PC)**.
+            ## Como usar
+            1. Baixe **DeXter-${{ env.VERSAO }}-win-x64.zip**, extraia e abra o **DeXter.exe** (não precisa instalar).
+               Se o Windows mostrar "O Windows protegeu o computador": *Mais informações → Executar assim mesmo*.
+            2. Ligue a **Depuração USB** no celular e conecte o cabo (ou configure o Wi-Fi pelo menu do ícone). O DeX abre sozinho.
 
-            Requisitos: Windows 10 2004+ ou Windows 11 com Wi-Fi compatível com Miracast; celular Samsung com DeX sem fio e Depuração USB ativa.
+            Requisitos: Windows 10/11 (x64); celular Samsung com DeX e Depuração USB ativa.
+            Quem usava a versão 0.3.x (instalada): desinstale antes em Configurações → Aplicativos → DeXter.

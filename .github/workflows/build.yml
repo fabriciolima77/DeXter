@@ -1,4 +1,4 @@
-# Compila a cada push/PR para conferir que nada quebrou (sem empacotar nem assinar).
+# Compila a cada push/PR para conferir que nada quebrou (app + servidor do DeX nativo).
 name: Build
 
 on:
@@ -14,8 +14,21 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Android SDK (plataforma + build-tools)
+        shell: pwsh
+        run: |
+          $sdkm = Join-Path $env:ANDROID_HOME 'cmdline-tools\latest\bin\sdkmanager.bat'
+          (1..20 | ForEach-Object { 'y' }) | & $sdkm --licenses | Out-Null
+          & $sdkm --install "platforms;android-35" "build-tools;35.0.0" | Out-Null
       - uses: actions/cache@v4
         with:
           path: vendor
           key: scrcpy-${{ hashFiles('src/DeXter/DeXter.csproj') }}
-      - run: dotnet build src/DeXter/DeXter.csproj -c Release
+      - name: Servidor do DeX nativo
+        shell: pwsh
+        run: ./server/build-server.ps1
+      - run: dotnet build src/DeXter/DeXter.csproj -c Release -p:PularServidor=true
